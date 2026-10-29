@@ -73,8 +73,7 @@ func Activate(sh, path, name string) string { return legacyVars(sh) + activate(s
 func activate(sh, path, name string) string {
 	switch sh {
 	case "pwsh", "powershell":
-		return fmt.Sprintf(`if (-not $env:_VENVCTL_OLD_PATH) { $env:_VENVCTL_OLD_PATH = $env:PATH }
-$env:VIRTUAL_ENV = '%[1]s'
+		return savePath(sh) + fmt.Sprintf(`$env:VIRTUAL_ENV = '%[1]s'
 $env:VIRTUAL_ENV_PROMPT = '%[2]s'
 $env:PATH = '%[1]s\Scripts;' + $env:_VENVCTL_OLD_PATH
 Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
@@ -86,9 +85,7 @@ if (-not ($env:POSH_THEME -or $env:POSH_SHELL -or $env:STARSHIP_SHELL)) {
 Write-Host "activated %[2]s" -ForegroundColor Green
 `, psq(path), psq(name))
 	case "cmd":
-		return fmt.Sprintf(`@echo off
-if not defined _VENVCTL_OLD_PATH set "_VENVCTL_OLD_PATH=%%PATH%%"
-set "VIRTUAL_ENV=%[1]s"
+		return "@echo off\r\n" + savePath(sh) + fmt.Sprintf(`set "VIRTUAL_ENV=%[1]s"
 set "VIRTUAL_ENV_PROMPT=%[2]s"
 set "PATH=%[1]s\Scripts;%%_VENVCTL_OLD_PATH%%"
 set PYTHONHOME=
@@ -99,8 +96,7 @@ echo activated %[2]s
 `, path, name)
 	default: // bash
 		p := posix(path)
-		return fmt.Sprintf(`export _VENVCTL_OLD_PATH="${_VENVCTL_OLD_PATH:-$PATH}"
-export VIRTUAL_ENV='%[1]s'
+		return savePath(sh) + fmt.Sprintf(`export VIRTUAL_ENV='%[1]s'
 export VIRTUAL_ENV_PROMPT='%[2]s'
 export PATH='%[1]s/Scripts':"$_VENVCTL_OLD_PATH"
 unset PYTHONHOME
@@ -111,6 +107,37 @@ fi
 echo "activated %[2]s"
 `, p, name)
 	}
+}
+
+// savePath stores the PATH to restore on `off`, once. If VIRTUAL_ENV is already set at that point,
+// someone else activated it (VS Code, an activate script): its Scripts folder is left out of the
+// saved PATH, so `off` does not bring that venv back onto PATH without its VIRTUAL_ENV.
+func savePath(sh string) string {
+	switch sh {
+	case "pwsh", "powershell":
+		return `if (-not $env:_VENVCTL_OLD_PATH) {
+    $p = $env:PATH
+    if ($env:VIRTUAL_ENV) {
+        $s = $env:VIRTUAL_ENV.TrimEnd('\') + '\Scripts'
+        $p = (($p -split ';') | Where-Object { $_ -and $_.TrimEnd('\') -ne $s }) -join ';'
+    }
+    $env:_VENVCTL_OLD_PATH = $p
+}
+`
+	case "cmd":
+		return "if not defined _VENVCTL_OLD_PATH set \"_VENVCTL_NEW=1\"\r\n" +
+			"if defined _VENVCTL_NEW set \"_VENVCTL_OLD_PATH=;%PATH%;\"\r\n" +
+			"if defined _VENVCTL_NEW if defined VIRTUAL_ENV call set \"_VENVCTL_OLD_PATH=%%_VENVCTL_OLD_PATH:;%VIRTUAL_ENV%\\Scripts;=;%%\"\r\n" +
+			"if defined _VENVCTL_NEW call set \"_VENVCTL_OLD_PATH=%%_VENVCTL_OLD_PATH:~1,-1%%\"\r\n" +
+			"set _VENVCTL_NEW=\r\n"
+	}
+	return `if [ -z "${_VENVCTL_OLD_PATH:-}" ]; then
+  _VENVCTL_OLD_PATH=":$PATH:"
+  if [ -n "${VIRTUAL_ENV:-}" ]; then _s=":${VIRTUAL_ENV%/}/Scripts:"; _VENVCTL_OLD_PATH="${_VENVCTL_OLD_PATH//"$_s"/:}"; unset _s; fi
+  _VENVCTL_OLD_PATH="${_VENVCTL_OLD_PATH#:}"; _VENVCTL_OLD_PATH="${_VENVCTL_OLD_PATH%:}"
+  export _VENVCTL_OLD_PATH
+fi
+`
 }
 
 // legacyVars adopts the save variables of a shell activated before the rename from pyGo

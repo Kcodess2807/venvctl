@@ -131,6 +131,29 @@ func TestEncodingRoundTrip(t *testing.T) {
 	}
 }
 
+// K1: the PATH saved on `on` must drop a foreign VIRTUAL_ENV's Scripts folder, in every shell,
+// and the script must still render (no fmt verbs) and save only once.
+func TestActivateStripsForeignVenvFromSavedPath(t *testing.T) {
+	for sh, want := range map[string][]string{
+		"pwsh": {`if (-not $env:_VENVCTL_OLD_PATH) {`, `$env:VIRTUAL_ENV.TrimEnd('\') + '\Scripts'`, `-ne $s`},
+		"cmd":  {`if not defined _VENVCTL_OLD_PATH set "_VENVCTL_NEW=1"`, `%%_VENVCTL_OLD_PATH:;%VIRTUAL_ENV%\Scripts;=;%%`, `%%_VENVCTL_OLD_PATH:~1,-1%%`},
+		"bash": {`if [ -z "${_VENVCTL_OLD_PATH:-}" ]; then`, `_s=":${VIRTUAL_ENV%/}/Scripts:"`, `${_VENVCTL_OLD_PATH//"$_s"/:}`},
+	} {
+		s := Activate(sh, `C:\proj\.venv`, "proj")
+		for _, w := range want {
+			if !strings.Contains(s, w) {
+				t.Errorf("%s activate script lacks %q:\n%s", sh, w, s)
+			}
+		}
+		if strings.Contains(s, "%!") {
+			t.Errorf("%s activate script has an unrendered fmt verb:\n%s", sh, s)
+		}
+		if strings.Index(s, "VIRTUAL_ENV") > strings.Index(s, `C:\proj`) && sh != "bash" {
+			t.Errorf("%s: PATH must be saved before VIRTUAL_ENV is overwritten", sh)
+		}
+	}
+}
+
 // The hook templates are fmt strings full of shell syntax; a stray % would render as %!x(...).
 func TestAutoTemplatesRender(t *testing.T) {
 	t.Setenv("VENVCTL_HOME", t.TempDir())
