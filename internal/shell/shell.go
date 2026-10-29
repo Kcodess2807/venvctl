@@ -21,7 +21,7 @@ import (
 // Handled reports whether a subcommand must run through the shell wrapper.
 func Handled(cmd string) bool {
 	switch cmd {
-	case "on", "activate", "off", "deactivate", "cd":
+	case "on", "activate", "off", "deactivate", "cd", "auto":
 		return true
 	}
 	return false
@@ -42,7 +42,7 @@ func Init(sh, exe string) (string, error) {
         if ($LASTEXITCODE -eq 0 -and $s) { Invoke-Expression $s }
     } else { & '%s' @args }
 }
-`, psq(exe), psq(exe)), nil
+`, psq(exe), psq(exe)) + autoIf(sh, exe), nil
 	case "bash":
 		e := posix(exe)
 		return fmt.Sprintf(`venvctl() {
@@ -51,11 +51,20 @@ func Init(sh, exe string) (string, error) {
     *) '%s' "$@" ;;
   esac
 }
-`, e, e), nil
+`, e, e) + autoIf(sh, exe), nil
 	case "cmd":
 		return fmt.Sprintf("@doskey venvctl=\"%s\" __shell cmd $* $T call \"%s\"\r\n", exe, EnvFile()), nil
 	}
 	return "", fmt.Errorf("unknown shell %q (pwsh, cmd, bash)", sh)
+}
+
+// autoIf is the auto-activate block when `venvctl config auto-activate on` is set.
+// VENVCTL_AUTO_ACTIVATE=1 forces it (testdata\autocd.ps1 and bench-hook use that).
+func autoIf(sh, exe string) string {
+	if AutoEnabled() || os.Getenv("VENVCTL_AUTO_ACTIVATE") == "1" {
+		return AutoInit(sh, exe)
+	}
+	return ""
 }
 
 // Activate returns the script that puts the venv at path on PATH and sets the prompt.
@@ -140,6 +149,7 @@ func deactivate(sh string) string {
 		return `if ($env:_VENVCTL_OLD_PATH) { $env:PATH = $env:_VENVCTL_OLD_PATH; Remove-Item Env:_VENVCTL_OLD_PATH }
 Remove-Item Env:VIRTUAL_ENV, Env:VIRTUAL_ENV_PROMPT -ErrorAction SilentlyContinue
 if (Test-Path function:global:_venvctl_old_prompt) { ${function:global:prompt} = ${function:global:_venvctl_old_prompt}; Remove-Item function:_venvctl_old_prompt }
+Remove-Item Env:_VENVCTL_AUTO -ErrorAction SilentlyContinue
 Write-Host "deactivated"
 `
 	case "cmd":
@@ -150,15 +160,32 @@ set VIRTUAL_ENV=
 set VIRTUAL_ENV_PROMPT=
 if defined _VENVCTL_OLD_PROMPT set "PROMPT=%_VENVCTL_OLD_PROMPT%"
 set _VENVCTL_OLD_PROMPT=
+set _VENVCTL_AUTO=
 echo deactivated
 `
 	default:
 		return `if [ -n "${_VENVCTL_OLD_PATH:-}" ]; then export PATH="$_VENVCTL_OLD_PATH"; unset _VENVCTL_OLD_PATH; fi
-unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT
+unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT _VENVCTL_AUTO
 if [ -n "${_VENVCTL_OLD_PS1+x}" ]; then PS1="$_VENVCTL_OLD_PS1"; unset _VENVCTL_OLD_PS1; fi
 echo deactivated
 `
 	}
+}
+
+// ActivateFor is Activate plus the clink format, which is computed here from the environment.
+func ActivateFor(sh, path, name string) string {
+	if sh == "clink" {
+		return clinkActivate(path, name)
+	}
+	return Activate(sh, path, name)
+}
+
+// DeactivateFor is Deactivate plus the clink format.
+func DeactivateFor(sh string) string {
+	if sh == "clink" {
+		return clinkDeactivate() + SetAuto(sh, false)
+	}
+	return Deactivate(sh)
 }
 
 // Cd returns the script that changes the shell's directory.

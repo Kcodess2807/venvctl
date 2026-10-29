@@ -191,7 +191,7 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 		for {
 			for _, n := range []string{".venv", "venv"} {
 				if e, ok := FromDir(filepath.Join(dir, n)); ok {
-					return r.merge(e), nil
+					return r.Merge(e), nil
 				}
 			}
 			parent := filepath.Dir(dir)
@@ -203,10 +203,10 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 		return Entry{}, ErrNoLocalVenv
 	}
 	if e, ok := FromDir(arg); ok {
-		return r.merge(e), nil
+		return r.Merge(e), nil
 	}
 	if e, ok := FromDir(filepath.Join(CentralDir(), arg)); ok {
-		return r.merge(e), nil
+		return r.Merge(e), nil
 	}
 	var hits []Entry
 	for _, e := range r.Envs {
@@ -223,9 +223,9 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 	return Entry{}, &AmbiguousError{Name: arg, Hits: hits}
 }
 
-// merge fills in what only the registry knows (linked project, last use, cached size, and the
+// Merge fills in what only the registry knows (linked project, last use, cached size, and the
 // env's own name when found through a redirect) for an entry built from disk.
-func (r *Registry) merge(e Entry) Entry {
+func (r *Registry) Merge(e Entry) Entry {
 	if r == nil {
 		return e
 	}

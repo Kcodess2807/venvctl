@@ -114,3 +114,27 @@ func TestEncodingRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The hook templates are fmt strings full of shell syntax; a stray % would render as %!x(...).
+func TestAutoTemplatesRender(t *testing.T) {
+	t.Setenv("VENVCTL_HOME", t.TempDir())
+	exe := `C:\Users\O'Neil\AppData\Local\venvctl\bin\venvctl.exe`
+	for name, s := range map[string]string{
+		"pwsh":  AutoInit("pwsh", exe),
+		"bash":  AutoInit("bash", exe),
+		"clink": clinkLua(exe),
+	} {
+		if strings.Contains(s, "%!") || strings.Contains(s, "%[") {
+			t.Errorf("%s template has an unrendered verb:\n%s", name, s)
+		}
+		if !strings.Contains(s, "trust.json") || !strings.Contains(s, "12") {
+			t.Errorf("%s template is missing the trust file or depth", name)
+		}
+	}
+	if !strings.Contains(AutoInit("pwsh", exe), "O''Neil") {
+		t.Error("pwsh template does not escape ' in the exe path")
+	}
+	if !strings.Contains(AutoInit("bash", exe), `O'\''Neil`) {
+		t.Error("bash template does not escape ' in the exe path")
+	}
+}

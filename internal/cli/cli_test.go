@@ -167,6 +167,72 @@ func TestParseSizeAndAge(t *testing.T) {
 	}
 }
 
+func TestAutoActivateTransitions(t *testing.T) {
+	t.Setenv("VENVCTL_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("_VENVCTL_OLD_PATH", "")
+	work := t.TempDir()
+	root, other := filepath.Join(work, "proj"), filepath.Join(work, "other")
+	fakeVenv(t, filepath.Join(root, ".venv"), true)
+	fakeVenv(t, filepath.Join(other, ".venv"), true)
+	venv := filepath.Join(root, ".venv")
+
+	auto := func(active, autoFlag, r string) string {
+		t.Setenv("VIRTUAL_ENV", active)
+		t.Setenv("_VENVCTL_AUTO", autoFlag)
+		var out, errOut bytes.Buffer
+		if code := Run([]string{"__shell", "pwsh", "auto", r}, &out, &errOut, strings.NewReader("")); code != 0 {
+			t.Fatalf("auto exit %d: %s", code, errOut.String())
+		}
+		return out.String()
+	}
+	activates := func(s string) bool { return strings.Contains(s, "$env:VIRTUAL_ENV = '"+venv+"'") }
+
+	if s := auto("", "", root); s != "" {
+		t.Errorf("untrusted root must not activate:\n%s", s)
+	}
+	run := func(args ...string) { Run(args, &bytes.Buffer{}, &bytes.Buffer{}, strings.NewReader("")) }
+	run("allow", root)
+	if s := auto("", "", root); !activates(s) || !strings.Contains(s, "$env:_VENVCTL_AUTO = '1'") {
+		t.Errorf("trusted root, nothing active: want activate + auto mark:\n%s", s)
+	}
+	if s := auto(venv, "1", root); s != "" {
+		t.Errorf("already active: want nothing:\n%s", s)
+	}
+	otherVenv := filepath.Join(other, ".venv")
+	if s := auto(otherVenv, "", root); s != "" {
+		t.Errorf("a venv the user or VS Code activated must be left alone:\n%s", s)
+	}
+	if s := auto(otherVenv, "1", root); !activates(s) {
+		t.Errorf("auto-activated venv, new trusted root: want switch:\n%s", s)
+	}
+	if s := auto(venv, "1", ""); !strings.Contains(s, "deactivated") {
+		t.Errorf("leaving an auto-activated root: want deactivate:\n%s", s)
+	}
+	if s := auto(otherVenv, "", ""); s != "" {
+		t.Errorf("leaving with a manual venv: want nothing:\n%s", s)
+	}
+	run("deny", root)
+	if s := auto(venv, "1", root); !strings.Contains(s, "deactivated") {
+		t.Errorf("root no longer trusted while auto-active: want deactivate:\n%s", s)
+	}
+
+	// The init code only carries the hook when auto-activate is enabled.
+	var out bytes.Buffer
+	Run([]string{"init", "pwsh"}, &out, &bytes.Buffer{}, strings.NewReader(""))
+	if strings.Contains(out.String(), "__venvctl_auto") {
+		t.Error("auto hook emitted while auto-activate is off")
+	}
+	run("config", "auto-activate", "on")
+	for _, sh := range []string{"pwsh", "bash"} {
+		out.Reset()
+		Run([]string{"init", sh}, &out, &bytes.Buffer{}, strings.NewReader(""))
+		if !strings.Contains(out.String(), "__venvctl_auto") {
+			t.Errorf("init %s: auto hook missing after `config auto-activate on`", sh)
+		}
+	}
+}
+
 func TestPrune(t *testing.T) {
 	la := t.TempDir()
 	t.Setenv("LOCALAPPDATA", la)

@@ -166,6 +166,7 @@ type Change struct {
 	Added   bool
 	Kept    bool
 	Changed bool
+	Notes   []string // extra actions, e.g. the Clink script
 }
 
 func (c Change) String() string {
@@ -195,6 +196,7 @@ func (c Change) String() string {
 	if len(parts) == 0 {
 		parts = append(parts, "nothing to change")
 	}
+	parts = append(parts, c.Notes...)
 	return c.Shell + ": " + strings.Join(parts, ", ")
 }
 
@@ -308,6 +310,7 @@ func updateCmd(exe string, o Options) (Change, error) {
 	if old, _ := os.ReadFile(hook); !o.Remove && string(old) != script {
 		c.Changed = true
 	}
+	clinkNote(&c, exe, o) // honours DryRun itself
 	if o.DryRun {
 		return c, nil
 	}
@@ -339,6 +342,39 @@ func updateCmd(exe string, o Options) (Change, error) {
 		return c, fmt.Errorf("AutoRun: %w", err)
 	}
 	return c, nil
+}
+
+const clinkMarker = "-- venvctl auto-activate for Clink"
+
+// clinkNote keeps %LOCALAPPDATA%\clink\venvctl.lua in step: written when auto-activate is on and
+// Clink is installed, deleted when auto-activate is off or on --remove (only if venvctl wrote it).
+// Plain CMD has no per-prompt hook, so without Clink auto-activate is skipped with a note.
+func clinkNote(c *Change, exe string, o Options) {
+	p := ClinkScript()
+	old, _ := os.ReadFile(p)
+	ours := bytes.HasPrefix(old, []byte(clinkMarker))
+	switch {
+	case o.Remove || !AutoEnabled():
+		if ours {
+			c.Notes = append(c.Notes, "removed Clink auto-activate script")
+			c.Changed = true
+			if !o.DryRun {
+				os.Remove(p)
+			}
+		}
+	case !HasClink():
+		c.Notes = append(c.Notes, "auto-activate in CMD needs Clink (not found), skipped")
+	default:
+		want := clinkLua(exe)
+		if string(old) != want {
+			c.Notes = append(c.Notes, "wrote Clink auto-activate script "+p)
+			c.Changed = true
+			if !o.DryRun {
+				os.MkdirAll(filepath.Dir(p), 0o755)
+				os.WriteFile(p, []byte(want), 0o644)
+			}
+		}
+	}
 }
 
 func autoRunValue() (string, uint32) {

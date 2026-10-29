@@ -103,7 +103,8 @@ func newRoot() *cobra.Command {
 		onCmd(), offCmd(), cdCmd(), createCmd(), linkCmd(), unlinkCmd(),
 		listCmd(), scanCmd(),
 		nukeCmd(), pruneCmd(), repairCmd(), doctorCmd(),
-		initCmd(), versionCmd(), completionCmd(root),
+		initCmd(), allowCmd(), denyCmd(), configCmd(), versionCmd(), completionCmd(root),
+		benchHookCmd(),
 		shellCmd(),
 	)
 	return root
