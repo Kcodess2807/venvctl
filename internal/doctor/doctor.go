@@ -3,10 +3,12 @@
 package doctor
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -48,7 +50,141 @@ func Run(exe string) []Check {
 		uv(),
 	}
 	checks = append(checks, hooks(exe)...)
-	return append(checks, oldStateDirs(), cloudVenvs())
+	return append(checks, oldStateDirs(), cloudVenvs(), ideDiscovery())
+}
+
+// ideDiscovery warns about central envs an editor cannot see: no project points at them with a
+// .venv redirect, and no VS Code-family settings.json lists the central folder. Read-only.
+func ideDiscovery() Check {
+	c := Check{Name: "IDE discovery of central envs", OK: true}
+	var central, unlinked []string
+	for _, e := range envmgr.LoadRegistry().Envs {
+		if !e.Central {
+			continue
+		}
+		central = append(central, e.Name)
+		if d := envmgr.Inspect(e.Project); e.Project != "" && d.Kind == "file" && envmgr.SamePath(d.Target, e.Path) {
+			continue
+		}
+		unlinked = append(unlinked, e.Name)
+	}
+	switch {
+	case len(central) == 0:
+		c.Detail = "no central envs"
+		return c
+	case len(unlinked) == 0:
+		c.Detail = fmt.Sprintf("all %d central envs are linked from a project .venv", len(central))
+		return c
+	}
+	if f := settingsCovering(envmgr.CentralDir()); f != "" {
+		c.Detail = "central folder is listed in " + f
+		return c
+	}
+	rel, err := filepath.Rel(os.Getenv("USERPROFILE"), envmgr.CentralDir())
+	if err != nil || strings.HasPrefix(rel, "..") {
+		rel = envmgr.CentralDir()
+	}
+	c.Warn = true
+	c.Detail = fmt.Sprintf("%d of %d central envs have no project .venv redirect: %s", len(unlinked), len(central), strings.Join(unlinked, ", "))
+	c.Fix = "run `venvctl link <name>` in each project folder, or add to VS Code settings.json: " +
+		`"python.venvFolders": ["` + strings.ReplaceAll(rel, `\`, `\\`) + `"]`
+	return c
+}
+
+// vscodeSettings are the user settings files of VS Code and its common forks.
+func vscodeSettings() []string {
+	var out []string
+	for _, app := range []string{"Code", "Code - Insiders", "Cursor", "VSCodium"} {
+		out = append(out, filepath.Join(os.Getenv("APPDATA"), app, "User", "settings.json"))
+	}
+	return out
+}
+
+// settingsCovering returns the first settings.json whose python.venvFolders,
+// python-envs.workspaceSearchPaths or python-envs.globalSearchPaths names dir.
+func settingsCovering(dir string) string {
+	for _, f := range vscodeSettings() {
+		b, err := os.ReadFile(f)
+		if err == nil && covers(b, dir) {
+			return f
+		}
+	}
+	return ""
+}
+
+// covers reports whether settings JSON (comments and trailing commas allowed) lists dir in a
+// venv search setting. Relative entries are relative to the home folder; ~ and ${userHome}
+// expand to it; an entry ending in ** covers everything below it.
+func covers(settings []byte, dir string) bool {
+	var m map[string]any
+	if json.Unmarshal(stripJSONC(settings), &m) != nil {
+		return false
+	}
+	home := os.Getenv("USERPROFILE")
+	for _, key := range []string{"python.venvFolders", "python-envs.workspaceSearchPaths", "python-envs.globalSearchPaths"} {
+		list, _ := m[key].([]any)
+		for _, v := range list {
+			s, _ := v.(string)
+			s = strings.ReplaceAll(s, "${userHome}", home)
+			if strings.HasPrefix(s, "~") {
+				s = home + s[1:]
+			}
+			deep := false
+			for _, g := range []string{"/**", `\**`, "/*", `\*`} {
+				if t, ok := strings.CutSuffix(s, g); ok {
+					s, deep = t, strings.HasSuffix(g, "**")
+				}
+			}
+			if s == "" {
+				continue
+			}
+			if !filepath.IsAbs(s) {
+				s = filepath.Join(home, s)
+			}
+			if envmgr.SamePath(s, dir) || (deep && strings.HasPrefix(strings.ToLower(filepath.Clean(dir)), strings.ToLower(filepath.Clean(s))+`\`)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var reTrailingComma = regexp.MustCompile(`,(\s*[}\]])`)
+
+// stripJSONC removes // and /* */ comments outside strings, then trailing commas, so VS Code's
+// settings.json parses as JSON.
+func stripJSONC(b []byte) []byte {
+	var out []byte
+	inStr, esc := false, false
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		switch {
+		case inStr:
+			out = append(out, c)
+			if esc {
+				esc = false
+			} else if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+		case c == '"':
+			inStr = true
+			out = append(out, c)
+		case c == '/' && i+1 < len(b) && b[i+1] == '/':
+			for i < len(b) && b[i] != '\n' {
+				i++
+			}
+			out = append(out, '\n')
+		case c == '/' && i+1 < len(b) && b[i+1] == '*':
+			for i += 2; i+1 < len(b) && !(b[i] == '*' && b[i+1] == '/'); i++ {
+			}
+			i++
+		default:
+			out = append(out, c)
+		}
+	}
+	return reTrailingComma.ReplaceAll(out, []byte("$1"))
 }
 
 // oldStateDirs warns while the pyGo or WinVenv state folders are still on disk.

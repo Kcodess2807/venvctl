@@ -111,6 +111,8 @@ func (r *Registry) Upsert(e Entry) {
 			}
 			if e.Project == "" {
 				e.Project = old.Project
+			} else if old.Name != "" {
+				e.Name = old.Name // found through a redirect: keep the env's own name, not the project's
 			}
 			r.Envs[i] = e
 			return
@@ -189,7 +191,7 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 		for {
 			for _, n := range []string{".venv", "venv"} {
 				if e, ok := FromDir(filepath.Join(dir, n)); ok {
-					return e, nil
+					return r.merge(e), nil
 				}
 			}
 			parent := filepath.Dir(dir)
@@ -201,10 +203,10 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 		return Entry{}, ErrNoLocalVenv
 	}
 	if e, ok := FromDir(arg); ok {
-		return e, nil
+		return r.merge(e), nil
 	}
 	if e, ok := FromDir(filepath.Join(CentralDir(), arg)); ok {
-		return e, nil
+		return r.merge(e), nil
 	}
 	var hits []Entry
 	for _, e := range r.Envs {
@@ -219,6 +221,27 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 		return hits[0], nil
 	}
 	return Entry{}, &AmbiguousError{Name: arg, Hits: hits}
+}
+
+// merge fills in what only the registry knows (linked project, last use, cached size, and the
+// env's own name when found through a redirect) for an entry built from disk.
+func (r *Registry) merge(e Entry) Entry {
+	if r == nil {
+		return e
+	}
+	for _, old := range r.Envs {
+		if !SamePath(old.Path, e.Path) {
+			continue
+		}
+		if e.Project == "" {
+			e.Project = old.Project
+		} else if old.Name != "" {
+			e.Name = old.Name
+		}
+		e.LastUsed, e.Size = old.LastUsed, old.Size
+		break
+	}
+	return e
 }
 
 // NotFoundError: the argument is neither a venv folder nor a known name.

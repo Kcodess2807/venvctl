@@ -100,7 +100,7 @@ func newRoot() *cobra.Command {
 	)
 	root.SetHelpCommandGroupID("setup")
 	root.AddCommand(
-		onCmd(), offCmd(), cdCmd(), createCmd(),
+		onCmd(), offCmd(), cdCmd(), createCmd(), linkCmd(), unlinkCmd(),
 		listCmd(), scanCmd(),
 		nukeCmd(), pruneCmd(), repairCmd(), doctorCmd(),
 		initCmd(), versionCmd(), completionCmd(root),

@@ -77,18 +77,24 @@ func confirm(question string) bool {
 
 func createCmd() *cobra.Command {
 	var py string
-	var local, verbose, force bool
+	var local, verbose, force, noRedirect bool
 	c := &cobra.Command{
 		Use:     "create [name]",
 		GroupID: "use",
 		Short:   "Create a venv: central by default, or .\\.venv with --local (uses uv if installed)",
-		Long: "Creates a venv with `uv venv` when uv is on PATH, else `python -m venv`.\n" +
-			"Central envs live in %LOCALAPPDATA%\\venvctl\\envs\\<name>. --local refuses cloud-synced folders\n" +
-			"(OneDrive, Dropbox, Google Drive, iCloudDrive) unless --force.",
+		Long: `Creates a venv with "uv venv" when uv is on PATH, else "python -m venv".
+Central envs live in %LOCALAPPDATA%\venvctl\envs\<name>. --local refuses cloud-synced folders
+(OneDrive, Dropbox, Google Drive, iCloudDrive) unless --force.
+
+A central env is linked to the current folder: .venv is written there as a PEP 832 redirect
+file holding the env's path, so editors find it and "venvctl on" here activates it. A .venv
+folder blocks this; a redirect pointing elsewhere is replaced only after you agree (or --force).
+--no-redirect skips it. See redirect.md.`,
 		Example: `  venvctl create api
   venvctl create api --python 3.12
   venvctl create --local -p C:\Python313\python.exe
-  venvctl create ml -p 3.11.7 --verbose`,
+  venvctl create ml -p 3.11.7 --verbose
+  venvctl create scratch --no-redirect`,
 		Args: nargs(cobra.MaximumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := ""
@@ -116,6 +122,13 @@ func createCmd() *cobra.Command {
 			if _, err := os.Stat(filepath.Join(dest, "pyvenv.cfg")); err == nil {
 				return Fail(exitRefused, dest+" already exists", "activate it with `venvctl on "+name+"`, or pick another name")
 			}
+			cwd, _ := os.Getwd()
+			link := !local && !noRedirect
+			if link {
+				if _, err := checkLink(cwd, dest, force); err != nil {
+					return err // checked before creating, so a refusal leaves nothing behind
+				}
+			}
 			if py == "" {
 				py = envmgr.LoadConfig().DefaultPython
 			}
@@ -141,6 +154,14 @@ func createCmd() *cobra.Command {
 				return Fail(exitFail, err.Error()+tail(buf.String()), "rerun with --verbose to see the exact command, then run it yourself to debug")
 			}
 			e.Name = name
+			redirect := ""
+			if link {
+				if err := envmgr.WriteRedirect(cwd, dest); err != nil {
+					note("%s venv created, but %s could not be written: %v; run `venvctl link %s` later", warnMark(), filepath.Join(cwd, ".venv"), err, name)
+				} else {
+					redirect, e.Project = filepath.Join(cwd, ".venv"), cwd
+				}
+			}
 			reg := envmgr.LoadRegistry()
 			reg.Upsert(e)
 			if err := reg.Save(); err != nil {
@@ -154,9 +175,13 @@ func createCmd() *cobra.Command {
 					Version    string   `json:"version"`
 					Central    bool     `json:"central"`
 					Command    []string `json:"command"`
-				}{e.Name, e.Path, e.Python, e.Version, e.Central, cmdline})
+					Redirect   string   `json:"redirect"`
+				}{e.Name, e.Path, e.Python, e.Version, e.Central, cmdline, redirect})
 			}
 			say("%s %s  %s  %s", okMark(), bold(e.Name), dim(e.Path), dim("python "+e.Version))
+			if redirect != "" {
+				say("%s linked %s → %s %s", okMark(), redirect, e.Path, dim("(venvctl unlink removes it)"))
+			}
 			say(dim("activate with: venvctl on " + e.Name))
 			return nil
 		},
@@ -165,8 +190,123 @@ func createCmd() *cobra.Command {
 	f.StringVarP(&py, "python", "p", "", "Python version (3.12, 3.12.3) or path to python.exe")
 	f.BoolVarP(&local, "local", "l", false, "create .\\.venv in the current folder")
 	f.BoolVarP(&verbose, "verbose", "v", false, "print the uv or python command that runs")
-	f.BoolVarP(&force, "force", "f", false, "allow --local inside a cloud-synced folder")
+	f.BoolVarP(&force, "force", "f", false, "allow --local in a cloud-synced folder; replace a .venv redirect pointing elsewhere")
+	f.BoolVar(&noRedirect, "no-redirect", false, "do not write a .venv redirect file in the current folder")
 	return c
+}
+
+// checkLink decides whether dir\.venv may be pointed at venv. already is true when it already
+// points there. It fails when .venv is a real folder, or a redirect elsewhere that the user did
+// not agree to replace (prompt in a console, else --force).
+func checkLink(dir, venv string, force bool) (already bool, err error) {
+	d := envmgr.Inspect(dir)
+	switch d.Kind {
+	case "dir":
+		return false, Fail(exitRefused, d.Path+" is a folder (a project-local venv), so no redirect can be written there",
+			"run from another folder, or use that venv with `venvctl on`")
+	case "file":
+		if envmgr.SamePath(d.Target, venv) {
+			return true, nil
+		}
+		if force || (interactive() && confirm(fmt.Sprintf("%s points at %s; point it at %s instead?", d.Path, d.Target, venv))) {
+			return false, nil
+		}
+		return false, Fail(exitRefused, d.Path+" already points at "+d.Target, "rerun with --force to repoint it")
+	}
+	return false, nil
+}
+
+func linkCmd() *cobra.Command {
+	var force bool
+	c := &cobra.Command{
+		Use:     "link <name|path>",
+		GroupID: "use",
+		Short:   "Point this folder's .venv at an existing venv (a PEP 832 redirect file)",
+		Long: "Writes .venv in the current folder as a one-line redirect file holding the venv's absolute path\n" +
+			"(PEP 832, draft). Editors and tools that understand redirects then find the central venv as\n" +
+			"this project's environment, and `venvctl on` here activates it. See redirect.md.",
+		Example: `  venvctl link api
+  venvctl link C:\envs\ml --force`,
+		Args: nargs(cobra.ExactArgs(1)),
+		RunE: func(_ *cobra.Command, args []string) error {
+			cwd, _ := os.Getwd()
+			reg := envmgr.LoadRegistry()
+			e, err := resolve(reg, args[0], "link")
+			if err != nil {
+				return err
+			}
+			if envmgr.SamePath(e.Path, filepath.Join(cwd, ".venv")) {
+				return nothing("this folder's .venv is that venv itself; nothing to link")
+			}
+			already, err := checkLink(cwd, e.Path, force)
+			if err != nil {
+				return err
+			}
+			if !already {
+				if err := envmgr.WriteRedirect(cwd, e.Path); err != nil {
+					return Fail(exitFail, "could not write "+filepath.Join(cwd, ".venv")+": "+err.Error(), "check that this folder is writable")
+				}
+			}
+			e.Project = cwd
+			reg.Upsert(e)
+			if err := reg.Save(); err != nil {
+				return Fail(exitFail, "linked, but the registry could not be saved: "+err.Error(), "run `venvctl scan "+cwd+"` to resync it")
+			}
+			if opt.json {
+				return emit(linkJSON{cwd, e.Path, filepath.Join(cwd, ".venv"), !already})
+			}
+			if already {
+				return nothing(filepath.Join(cwd, ".venv") + " already points at " + e.Path)
+			}
+			say("%s linked %s → %s", okMark(), filepath.Join(cwd, ".venv"), e.Path)
+			return nil
+		},
+	}
+	c.Flags().BoolVarP(&force, "force", "f", false, "replace a .venv redirect that points at another venv")
+	return c
+}
+
+type linkJSON struct {
+	Project  string `json:"project"`
+	Venv     string `json:"venv"`
+	Redirect string `json:"redirect"`
+	Changed  bool   `json:"changed"`
+}
+
+func unlinkCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "unlink",
+		GroupID: "use",
+		Short:   "Remove this folder's .venv redirect file (never a real venv folder)",
+		Example: `  venvctl unlink`,
+		Args:    nargs(cobra.NoArgs),
+		RunE: func(*cobra.Command, []string) error {
+			cwd, _ := os.Getwd()
+			d := envmgr.Inspect(cwd)
+			switch d.Kind {
+			case "none":
+				return nothing("no .venv redirect in " + cwd)
+			case "dir":
+				return Fail(exitRefused, d.Path+" is a real venv folder, not a redirect",
+					"unlink only removes redirect files; to delete a venv use `venvctl nuke`")
+			}
+			if err := envmgr.RemoveRedirect(cwd); err != nil {
+				return Fail(exitFail, "could not remove "+d.Path+": "+err.Error(), "check that the file is not read-only")
+			}
+			reg := envmgr.LoadRegistry()
+			for i := range reg.Envs {
+				if envmgr.SamePath(reg.Envs[i].Project, cwd) {
+					reg.Envs[i].Project = ""
+				}
+			}
+			reg.Save()
+			if opt.json {
+				return emit(linkJSON{cwd, d.Target, d.Path, true})
+			}
+			say("%s removed %s %s", okMark(), d.Path, dim("(it pointed at "+d.Target+"; the venv itself is untouched)"))
+			return nil
+		},
+	}
 }
 
 // quoteArgs renders a command line with paths quoted when they contain spaces.

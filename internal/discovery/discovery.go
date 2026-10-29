@@ -66,8 +66,9 @@ var skipDirs = map[string]bool{
 // Progress counts scan work. Read it from another goroutine while Scan runs.
 type Progress struct{ Dirs, Found atomic.Int64 }
 
-// Scan walks roots concurrently and returns every directory holding a pyvenv.cfg, sorted.
-// It does not descend into a venv once found, nor into skipDirs or symlinks. p may be nil.
+// Scan walks roots concurrently and returns every directory holding a pyvenv.cfg, plus every
+// `.venv` file (PEP 832 redirect), sorted. It does not descend into a venv once found, nor into
+// skipDirs, trash folders or symlinks. p may be nil.
 func Scan(roots []string, p *Progress) []string {
 	if p == nil {
 		p = &Progress{}
@@ -99,6 +100,12 @@ func Scan(roots []string, p *Progress) []string {
 			}
 		}
 		for _, e := range ents {
+			if e.Name() == ".venv" && !e.IsDir() { // a PEP 832 redirect file; the caller follows it
+				mu.Lock()
+				out = append(out, filepath.Join(dir, ".venv"))
+				mu.Unlock()
+				continue
+			}
 			if !e.IsDir() || e.Type()&os.ModeSymlink != 0 || skipDirs[strings.ToLower(e.Name())] || IsTrash(e.Name()) {
 				continue
 			}

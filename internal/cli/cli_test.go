@@ -219,3 +219,73 @@ func TestPrune(t *testing.T) {
 		t.Errorf("good venv was touched: %v", err)
 	}
 }
+
+func TestLinkUnlink(t *testing.T) {
+	la := t.TempDir()
+	t.Setenv("LOCALAPPDATA", la)
+	work := t.TempDir()
+	a, b := filepath.Join(work, "envs", "a"), filepath.Join(work, "envs", "b")
+	fakeVenv(t, a, true)
+	fakeVenv(t, b, true)
+	reg, _ := json.Marshal(map[string]any{"envs": []map[string]any{
+		{"name": "a", "path": a}, {"name": "b", "path": b},
+	}})
+	os.MkdirAll(filepath.Join(la, "venvctl"), 0o755)
+	os.WriteFile(filepath.Join(la, "venvctl", "registry.json"), reg, 0o644)
+	proj := filepath.Join(work, "proj")
+	os.MkdirAll(proj, 0o755)
+	t.Chdir(proj)
+
+	run := func(args ...string) (int, string) {
+		var out, errOut bytes.Buffer
+		code := Run(args, &out, &errOut, strings.NewReader(""))
+		return code, out.String() + errOut.String()
+	}
+	steps := []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"unlink"}, 4, "no .venv redirect"},
+		{[]string{"link", "a"}, 0, "linked"},
+		{[]string{"link", "a"}, 4, "already points at"},
+		{[]string{"link", "b"}, 3, "--force to repoint"}, // no console to ask
+		{[]string{"link", "b", "--force"}, 0, "linked"},
+		{[]string{"list", "--paths", "--filter", "local"}, 0, b},
+		{[]string{"unlink"}, 0, "removed"},
+		{[]string{"unlink"}, 4, "no .venv redirect"},
+	}
+	for _, s := range steps {
+		code, out := run(s.args...)
+		if code != s.code || !strings.Contains(out, s.want) {
+			t.Fatalf("%v: exit %d (want %d), missing %q in:\n%s", s.args, code, s.code, s.want, out)
+		}
+		if s.args[0] == "link" && code == 0 {
+			got, _ := os.ReadFile(filepath.Join(proj, ".venv"))
+			want := map[bool]string{true: b, false: a}[len(s.args) == 3] + "\n"
+			if string(got) != want {
+				t.Fatalf("redirect file %q, want %q (UTF-8, no BOM, one line, \n)", got, want)
+			}
+		}
+	}
+	// list shows "<project> → <venv>" while linked, and cd goes to the project, not the venv.
+	run("link", "a")
+	if _, out := run("list", "--no-color"); !strings.Contains(out, proj+" → "+a) {
+		t.Errorf("list does not show project → venv:\n%s", out)
+	}
+	if _, out := run("__shell", "pwsh", "cd", "a"); !strings.Contains(out, "'"+proj+"'") {
+		t.Errorf("cd of a linked env should go to its project:\n%s", out)
+	}
+	// A real .venv folder is never replaced or removed.
+	os.Remove(filepath.Join(proj, ".venv"))
+	os.MkdirAll(filepath.Join(proj, ".venv"), 0o755)
+	if code, out := run("link", "a"); code != 3 || !strings.Contains(out, "is a folder") {
+		t.Errorf("link over a .venv folder: exit %d\n%s", code, out)
+	}
+	if code, _ := run("unlink"); code != 3 {
+		t.Errorf("unlink of a .venv folder: exit %d, want 3", code)
+	}
+	if _, err := os.Stat(filepath.Join(proj, ".venv")); err != nil {
+		t.Errorf(".venv folder was removed")
+	}
+}
