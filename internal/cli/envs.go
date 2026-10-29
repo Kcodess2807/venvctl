@@ -77,7 +77,7 @@ func confirm(question string) bool {
 
 func createCmd() *cobra.Command {
 	var py string
-	var local, verbose, force, noRedirect bool
+	var local, verbose, force, noRedirect, noRelocatable bool
 	c := &cobra.Command{
 		Use:     "create [name]",
 		GroupID: "use",
@@ -89,7 +89,11 @@ Central envs live in %LOCALAPPDATA%\venvctl\envs\<name>. --local refuses cloud-s
 A central env is linked to the current folder: .venv is written there as a PEP 832 redirect
 file holding the env's path, so editors find it and "venvctl on" here activates it. A .venv
 folder blocks this; a redirect pointing elsewhere is replaced only after you agree (or --force).
---no-redirect skips it. See redirect.md.`,
+--no-redirect skips it. See redirect.md.
+
+With uv 0.2.31 or newer the venv is created relocatable (uv venv --relocatable): its scripts
+and launchers use relative paths, so moving it never needs "venvctl repair". --no-relocatable
+opts out. The python -m venv fallback has no such option.`,
 		Example: `  venvctl create api
   venvctl create api --python 3.12
   venvctl create --local -p C:\Python313\python.exe
@@ -137,7 +141,7 @@ folder blocks this; a redirect pointing elsewhere is replaced only after you agr
 					return Fail(exitUsage, "no interpreter at "+py, "pass an existing python.exe, or a version like 3.12")
 				}
 			}
-			cmdline, err := envmgr.CreateCommand(dest, py)
+			cmdline, err := envmgr.CreateCommand(dest, py, !noRelocatable)
 			if err != nil {
 				return Fail(exitFail, err.Error(), "install it (`uv python install "+py+"` or python.org), or pass --python <path to python.exe>")
 			}
@@ -192,6 +196,7 @@ folder blocks this; a redirect pointing elsewhere is replaced only after you agr
 	f.BoolVarP(&verbose, "verbose", "v", false, "print the uv or python command that runs")
 	f.BoolVarP(&force, "force", "f", false, "allow --local in a cloud-synced folder; replace a .venv redirect pointing elsewhere")
 	f.BoolVar(&noRedirect, "no-redirect", false, "do not write a .venv redirect file in the current folder")
+	f.BoolVar(&noRelocatable, "no-relocatable", false, "with uv: create a plain venv instead of a relocatable one (uv venv --relocatable)")
 	return c
 }
 

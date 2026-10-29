@@ -326,3 +326,29 @@ func TestRepairRelocatable(t *testing.T) {
 		t.Errorf("pip.exe after relative repair: %v\n%s", err, out)
 	}
 }
+
+// C1: create asks uv for a relocatable venv unless opted out.
+func TestCreateCommandRelocatable(t *testing.T) {
+	if _, ok := UvVersion(); !ok {
+		t.Skip("uv not installed")
+	}
+	has := func(args []string) bool {
+		for _, a := range args {
+			if a == "--relocatable" {
+				return true
+			}
+		}
+		return false
+	}
+	on, _ := CreateCommand(`C:\x\.venv`, "", true)
+	off, _ := CreateCommand(`C:\x\.venv`, "", false)
+	if UvAtLeast(0, 2, 31) && !has(on) {
+		t.Errorf("relocatable requested but missing: %v", on)
+	}
+	if has(off) {
+		t.Errorf("--no-relocatable still passes --relocatable: %v", off)
+	}
+	if !UvAtLeast(0, 0, 1) || UvAtLeast(999, 0, 0) {
+		t.Error("UvAtLeast comparison is wrong")
+	}
+}

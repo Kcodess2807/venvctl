@@ -260,11 +260,16 @@ func (e *AmbiguousError) Error() string {
 
 // CreateCommand returns the command that creates a venv at dest: `uv venv` when uv is on PATH,
 // else `<python> -m venv`. py is "", a version ("3.12", "3.12.3") or a path to python.exe.
-func CreateCommand(dest, py string) ([]string, error) {
+// relocatable adds `--relocatable` when uv supports it (0.2.31+), so the venv survives a move
+// and never needs repair; the python -m venv fallback has no such option and ignores it.
+func CreateCommand(dest, py string, relocatable bool) ([]string, error) {
 	if uv, err := exec.LookPath("uv"); err == nil {
 		args := []string{uv, "venv", dest}
 		if py != "" {
 			args = append(args, "--python", py)
+		}
+		if relocatable && UvAtLeast(0, 2, 31) {
+			args = append(args, "--relocatable")
 		}
 		return args, nil
 	}
