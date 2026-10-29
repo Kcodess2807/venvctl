@@ -57,7 +57,7 @@ Plus `venvctl doctor`, which diagnoses machine-level causes: Store stubs, Execut
 17. **Phase 7.** The rest of the audit applied.
 18. **Docs.** `docs/json.md` added, and this file refreshed.
 
-The change history is in section 18.
+The change history is in section 19; this run's pre-launch fixes are in section 18.
 
 ---
 
@@ -94,7 +94,7 @@ D:\PROJECTS\venvctl\                    (was D:\PROJECTS\pygo, renamed at the en
 └── .gitattributes (LF), .gitignore
 ```
 
-That's about 6,000 lines of Go, about a third of them tests.
+That's about 5,800 lines of Go, about 800 of them tests.
 
 ```
 cmd/venvctl ─> cli ─┬─> doctor ─┬─> discovery
@@ -163,14 +163,14 @@ Every error prints `✗ <what happened>` and then `  → <what to do next>`.
 | Use | `on [name\|path]` (`activate`) | | Activate: the nearest venv upward (following redirects), a name, or a path. Needs the hook. |
 | Use | `off` (`deactivate`) | | Restore PATH and prompt. Also cleans up shells activated in the pyGo era. |
 | Use | `cd <name\|path>` | | Go to the project folder; for a linked central env that's the linked project |
-| Use | `create [name]` | `-p/--python 3.12\|3.12.3\|path`, `-l/--local`, `-v/--verbose`, `-f/--force`, `--no-redirect` | A central env, linked to the current folder by a `.venv` redirect; or `.\.venv` with `--local`, refused in cloud folders without `--force` |
+| Use | `create [name]` | `-p/--python 3.12\|3.12.3\|path`, `-l/--local`, `-v/--verbose`, `-f/--force`, `--no-redirect`, `--no-relocatable` | A central env, linked to the current folder by a `.venv` redirect; or `.\.venv` with `--local`, refused in cloud folders without `--force`. With uv 0.2.31+ it is created relocatable (`uv venv --relocatable`), so it never needs repair. |
 | Use | `link <name\|path>` | `-f/--force` | Write or update this folder's `.venv` redirect |
 | Use | `unlink` | | Remove this folder's `.venv` redirect (never a `.venv` folder) |
 | Find | `list` (`ls`) | `--sort name\|size\|last-used\|version`, `--filter missing\|broken\|central\|local`, `--min-size 500MB`, `--older-than 90d`, `--paths` | Table with `*` marking the active venv, right-aligned sizes, `~` for estimated last use, and `project → venv` |
 | Find | `scan [root...]` | `-n/--dry-run` | Register venvs and redirect files, unregister vanished ones; live counter on consoles |
-| Maintain | `nuke <name\|path>...` (`rm`) | `-f/--force`, `-n/--dry-run` | Delete, after showing and (with your OK) stopping lockers; editors and shells are never stopped |
+| Maintain | `nuke <name\|path>...` (`rm`) | `-f/--force`, `-n/--dry-run`, `--wait 30s` | Delete, after showing and (with your OK) stopping lockers; editors and shells are never stopped. Refuses when you're inside the venv; asks PowerToys File Locksmith (read-only) when the Restart Manager names nobody; `--wait` retries for antivirus |
 | Maintain | `prune` | `--older-than`, `--min-size`, `--missing`, `--broken`, `--central`/`--local`, `-n/--dry-run`, `-y/--yes` | Bulk delete through the nuke path; needs at least one criterion; skips the active venv |
-| Maintain | `repair [name\|path]` | `-n/--dry-run` | Rewrite a moved venv's old path in `Scripts\`, at path boundaries |
+| Maintain | `repair [name\|path]` | `-n/--dry-run`, `--relative` | Fix a moved venv made by pip/venv or older uv, file by file by format (section 8.3); relocatable venvs need no repair (exit 4) |
 | Maintain | `doctor` | | Read-only checks (section 9) |
 | Setup | `init [pwsh\|powershell\|bash\|cmd]` | `--install`, `-n/--dry-run`, `--remove` | No argument: update every shell, removing WinVenv/pyGo hooks first. `pwsh`/`bash`: print the hook code (`--install` installs that shell). `cmd`: install the CMD hook. |
 | Setup | `allow [dir]` | `--list` | Trust a project root for auto-activate (default: the current folder's root) |
@@ -280,22 +280,50 @@ Turn it on with `venvctl config auto-activate on`, open a new terminal, then run
 ```
 resolve all targets first (a typo deletes nothing)
 for each: gone? -> unregister
-  lockers? -> table PID / NAME / SPAWNED BY / OPEN FILES
+  current directory inside the venv? -> refuse (exit 3): "cd out and retry"
+  Restart Manager lockers? -> table PID / NAME / SPAWNED BY / OPEN FILES
     editor or shell (Code, Cursor, PyCharm, IntelliJ, devenv, Explorer, Terminal, pwsh, powershell, cmd, bash) -> refuse (exit 3)
     --force -> terminate | console -> "terminate N process(es)? [y/N]" (default No) | else refuse (exit 3)
-  rename <dir> -> <dir>.<ns>.venvctl-trash   (backoff 0..800 ms; failure = untouched, "still locked")
+  rename <dir> -> <dir>.<ns>.venvctl-trash   (backoff 0..800 ms; --wait: capped exponential to 2 s, up to 60 s, a dot per retry)
+    rename failed and RM named nobody?
+      PowerToys File Locksmith CLI on PATH -> run with --json only (never --kill); its processes join the
+        table "via File Locksmith" and go through the same refusal list and [y/N]; then rename again
+      otherwise -> "something still holds <venv> but Windows didn't say what" + common causes
+        (shell/Explorer inside it, open .py/log, antivirus/EDR), --wait and Dev Drive hints
+    still failing -> untouched, exit 1
   clear read-only, RemoveAll(trash)            (backoff; failure = "leftovers remain in <trash>")
   sweep older <dir>.*.{venvctl,pygo,wv}-trash leftovers
   unregister; registry saved even if a later target fails
 ```
 
+The Restart Manager rejects directory registrations, and venvctl registers only `.exe`/`.dll`/`.pyd`, so open `.py`/log files and current-directory handles are invisible to it. That's why the cwd refusal and the File Locksmith fallback exist.
+
 ### 8.3 Repair
 
-The old path is read from `activate.bat`, in either the venv or the uv format. Every file in `Scripts\` is then rewritten. uv launchers (`UVSC`/`UVPY`/`UVUV` trailer) get the length-prefixed path replaced and the length fixed up. Everything else gets a **boundary-aware** replace in both slash forms: the old path must be followed by `\ / " ' ) ;`, whitespace, end of line or end of data. So `C:\x\proj` never rewrites `C:\x\proj2`; that's unit-tested. `--dry-run` lists the files that would change. `pyvenv.cfg` is left alone.
+> **Correction.** Earlier versions of this section said uv launchers use a `UVSC`/`UVPY`/`UVUV` trailer. That is only true before uv 0.9.9 (2025-11-12). Since then uv keeps the interpreter path in a PE resource. The old repair would byte-replace inside those `.exe` files and corrupt them. Fixed in R1 (section 18).
+
+The old path is read from `activate.bat` (venv's `set VIRTUAL_ENV=` or uv's `for %%i in ("...")`). Each file in `Scripts\` is then **classified** and only edited through a structure venvctl understands:
+
+| Kind | How it's recognised | What repair does |
+|---|---|---|
+| `uv-rcdata` (uv ≥ 0.9.9) | PE file where `LoadLibraryEx(AS_DATAFILE \| AS_IMAGE_RESOURCE)` + `FindResource(RT_RCDATA, "UV_PYTHON_PATH")` succeeds | `UpdateResource` sets `UV_PYTHON_PATH` (language neutral, raw UTF-8, like uv) to the **relative** `python.exe` or `pythonw.exe`, which uv's trampoline resolves against its own folder. The launcher is relocatable from then on. A signed launcher's Authenticode signature is invalidated and reported. |
+| `uv-trailer` (uv < 0.9.9) | ends in `UVSC`/`UVPY`/`UVUV` | path in the trailer rewritten, u32 length fixed up |
+| `distlib` (pip) | PE with a `#!...` line right before the zip (`\nPK\x03\x04`) | the shebang line rewritten; `--relative` writes `#!"<launcher_dir>\python.exe"` (distlib 0.3.0+, every current pip) |
+| `text` | no NUL bytes | **boundary-aware** replace in both slash forms (`C:\x\proj` never rewrites `C:\x\proj2`) |
+| `other-pe`, `binary` | anything else | never modified; listed as skipped if it mentions the old path |
+
+**Relocatable venvs.** `pyvenv.cfg` `relocatable = true`, or `%~dp0` in `activate.bat`, means "is relocatable; nothing to repair" (exit 4). The only exception is launchers with an absolute interpreter that no longer exists, which pip writes; those are made relative. `venvctl create` makes relocatable venvs with uv 0.2.31+, so its central envs never need repair.
+
+**Scope.** Repair is for venvs made by pip/venv and older uv. New uv venvs made with `--relocatable` don't need it. `--dry-run` lists every change, kind and old → new path. `pyvenv.cfg` `home` and editable-install `.pth` files are left alone.
 
 ### 8.4 Other
 
-- **Store alias.** The stub is detected by reparse tag `0x8000001B` through `FindFirstFile`.
+- **App Execution Aliases.** The alias's reparse data is read with `CreateFile(OPEN_REPARSE_POINT | BACKUP_SEMANTICS)` + `FSCTL_GET_REPARSE_POINT` (tag `0x8000001B`, version 3, then package family name / app ID / target as UTF-16). The owning package decides what it is:
+  - `Microsoft.DesktopAppInstaller_*` or an `AppInstallerPythonRedirector.exe` target is the Store stub.
+  - `PythonSoftwareFoundation.PythonManager_*` is PyManager.
+  - `PythonSoftwareFoundation.Python.*` is Store CPython.
+
+  The prefixes were checked against PyManager's own `check_app_alias` and this machine's stub.
 - **PEP 514.** venvctl reads HKCU, HKLM and WOW6432Node `Software\Python\<Company>\<Tag>`, sorted newest first with `slices.Compare`.
 - **Scan.**
   - It runs one goroutine per folder, with 64 directory reads at a time, and stops descending at a `pyvenv.cfg`.
@@ -309,11 +337,10 @@ The old path is read from `activate.bat`, in either the venv or the uv format. E
 
 | Check | Warns / fails when | Fix it prints |
 |---|---|---|
-| python on PATH | the first `python.exe` is the Store stub (fail), or none on PATH (warn) | aliases / PATH order |
-| Store app execution alias | stubs exist (warn) | disable aliases |
+| python on PATH (includes the alias check) | the first `python.exe` is the Store **redirector** alias (fail), an unrecognised alias (warn), or none on PATH (warn). A PyManager or Store CPython alias **passes** and is named. Shadowed stubs are mentioned, not warned about. | App execution aliases settings, or `py install --configure` when PyManager is present |
 | registered interpreters (PEP 514) | none (warn) | uv-managed still work |
 | PowerShell ExecutionPolicy | deciding scope is Restricted/AllSigned (fail), naming the scope | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or the Group Policy workaround |
-| LongPathsEnabled | disabled (warn) | admin `reg add` |
+| LongPathsEnabled | disabled (warn); only **info** when uv ≥ 0.12.14 is installed, since uv handles long paths itself | admin `reg add`, or `py install --configure` with PyManager |
 | VC++ 2015-2022 runtime | `vcruntime140.dll` missing (fail) | vc_redist link |
 | uv | missing (warn) | install command |
 | venvctl shell hooks | a shell missing, stale (calls another exe) or removed (warn); only `venvctl.exe` lines count | `venvctl init` |
@@ -323,14 +350,13 @@ The old path is read from `activate.bat`, in either the venv or the uv format. E
 | venvs in cloud-synced folders | registered venvs under OneDrive/Dropbox/... (warn) | move to a central env |
 | IDE discovery of central envs | a central env has no project redirect, and no VS Code/Cursor/VSCodium settings list the central folder (warn) | `venvctl link`, or the `python.venvFolders` snippet |
 
-Warnings exit 0; only failures exit 1. Doctor never changes anything.
+Statuses are `ok`, `info`, `warn` and `fail`. Warnings and info exit 0; only failures exit 1. Doctor never changes anything.
 
 ### Your machine (dry runs from the new build against a temp state folder)
 
 | Check | Result |
 |---|---|
-| python on PATH | ✓ `C:\ProgramData\anaconda3\python.exe` |
-| Store alias | ! stubs present |
+| python on PATH | ✓ `C:\ProgramData\anaconda3\python.exe`; Store redirector aliases (`Microsoft.DesktopAppInstaller_8wekyb3d8bbwe`) shadowed, harmless |
 | interpreters | ✓ 3.13.7, 3.12.3, 3.11.7, 3.10.0, PythonCore/3.11 |
 | ExecutionPolicy | ✓ RemoteSigned (CurrentUser) |
 | LongPathsEnabled | ! disabled |
@@ -346,7 +372,12 @@ Warnings exit 0; only failures exit 1. Doctor never changes anything.
 | first smoke test | `repair` could not read uv venvs | accepts uv's `for %%i in ("...")` form |
 | first smoke test | warnings shown as failures | warn wins |
 | first smoke test | blank interpreter row | company/tag fallback |
-| research brief | `repair` corrupted uv console-script launchers (`UVSC` unknown) | all three magics, test |
+| research brief | `repair` corrupted uv console-script launchers (`UVSC` unknown) | all three magics, test (but see R1 below: uv ≥ 0.9.9 has no trailer at all) |
+| competitive research | `repair` byte-replaced inside uv ≥ 0.9.9 launchers (path in a PE resource), corrupting them (inferred from uv source) | R1: format-aware repair, resource rewrite to a relative path, no PE byte replace |
+| competitive research | `repair` hard-coded paths into relocatable uv venvs (`%~dp0` read as the old path; reproduced) | R2: relocatable venvs are left alone |
+| competitive research | `doctor` told PyManager / Store-CPython users to disable their working aliases | D1: aliases classified by owning package |
+| competitive research | `off` left a VS Code-activated venv's `Scripts` on PATH | K1: stripped from the saved PATH |
+| this run | `--json` repair schema was path-only | now `fixed` / `skipped` / `relocatable` with kinds |
 | Phase 0 | doctor counted old `wv` hooks as installed | compares the exe each hook calls |
 | Phase 0 | `repair` rewrote `C:\x\proj2` when moving `C:\x\proj` | boundary-aware replace, test |
 | Phase 0 | duplicate names were a dead end | picker / exact commands |
@@ -519,11 +550,14 @@ It never deletes anything in the old folder. The check uses `registry.json`, not
 
 - **Hook ordering.** Auto-activate looks for oh-my-posh, starship and zoxide when the profile runs. If venvctl's line comes before theirs, the wrong attachment is used. Keep venvctl's line last.
 - **First prompt after activation.** In prompt-wrapper mode it has no `(name)` prefix yet, because the prompt was replaced while rendering. The next prompt shows it.
-- **Foreign venvs.** Switching away from a VS Code-activated venv keeps that venv's `Scripts` in the saved PATH, so after `off` it is back on PATH while `VIRTUAL_ENV` is unset.
-- **Clink script untested.** Clink isn't installed here. The script renders and follows the same rule, but `os.unsetenv` and the `io.popen` quoting have never run.
+- **CMD auto-activate is experimental (untested).** Clink isn't installed here. The script renders and follows the same rule, but `os.unsetenv` and the `io.popen` quoting have never run. Help text and `init` output say so.
+- **New-format uv launchers never run after repair here.** Repair of uv ≥ 0.9.9 (`UV_PYTHON_PATH` resource) launchers is tested on synthetic launchers, a real Windows PE stamped with the resource the way uv does. This machine's uv is 0.8.23, and running a downloaded newer uv was blocked. `TestRepairEndToEndCurrentUv` asserts the new format automatically once uv ≥ 0.9.9 is installed.
+- **Signed uv launchers** (uv ≥ 0.12.12) lose their Authenticode signature when repair rewrites them. venvctl warns. Reinstall the package if policy requires signed binaries.
+- **File Locksmith output encoding** is handled as UTF-8 or UTF-16. Only a fake CLI emitting the real JSON shape was tested, not real PowerToys.
+- **Foreign venv in Git Bash with a Windows-form `VIRTUAL_ENV`** (`C:\...` rather than `/c/...`) is not stripped from the saved PATH. VS Code sets the POSIX form there.
 - **ANSI-encoded PowerShell profiles.** A profile in a legacy code page with a non-ASCII exe path would get a UTF-8 path. UTF-8 and UTF-16 profiles are handled.
 - **One project link per env.** `project` holds the last linked project. A central env linked from two projects lists only the latest.
-- **Repair's uv-trampoline rewrite** keeps absolute paths. Whether uv's launcher accepts relative paths is unverified.
+- **Repair rewrites old-format (trailer) uv launchers to the new absolute path** in non-relocatable venvs; only uv ≥ 0.9.9 resource launchers and relocatable-venv strays become relative. uv's trampoline does resolve relative paths (verified in `bounce.rs`, and relocatable uv 0.8.23 launchers ran after a move here).
 - **Old trash sweeping** only happens next to venvs being deleted. Stray trash elsewhere stays until you nuke it by path.
 - **Duplicate names** need a path, or the console picker. Git Bash under mintty is not a console, so you get the printed commands instead.
 - **Migration** of the real `%LOCALAPPDATA%\pygo` happens on your first `venvctl` run. I did not run it.
@@ -539,6 +573,10 @@ It never deletes anything in the old folder. The check uses `registry.json`, not
 | Git Bash, real | `bash --noprofile --norc` with the init code: enter, nested, untrusted hint, leave, PATH restored |
 | Locks, real | a live `python.exe` holding a venv: dry run, refusal (exit 3, intact), `--force` |
 | Create/redirect, real | uv create in a temp home: redirect bytes, refusal to repoint, `on` follows it, doctor IDE check |
+| Repair, real (this run) | uv 0.8.23 venvs moved to longer paths: trailer launchers, activate scripts, `pyflakes.exe`/`pip.exe` run after repair; relocatable venv unmoved/moved (untouched, launchers run); pip's own distlib launchers inside a relocatable venv made `#!"<launcher_dir>\python.exe"` and `pip.exe` runs; synthetic `UV_PYTHON_PATH` launchers (resource stamped on a real PE) rewritten to `python.exe`/`pythonw.exe`; unknown PE byte-identical; migration test repairs and runs a uv console script |
+| Doctor aliases, real (this run) | reparse parser on byte fixtures (stub, PyManager, Store CPython, malformed); this machine's real `python.exe`/`python3.exe` aliases read as `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe` → `AppInstallerPythonRedirector.exe` |
+| Nuke fallbacks (this run) | a real open `.py` file blocking the rename (RM names nobody) with a fake File Locksmith CLI: editor refused, ordinary process refused without `--force`, `--kill` never passed; no-Locksmith message; cwd refusal; `DeleteWait` retries then succeeds when the lock is released |
+| PATH after `off` (this run) | VS Code-style foreign venv in throwaway PowerShell, CMD and Git Bash: PATH after `on`/`off` equals the original minus the foreign `Scripts` |
 | Build | `build.ps1` both arches, version resource, manifest, checksums, sign dry run |
 | Your machine, read-only | `init --dry-run`, doctor, list (77 venvs, 15.8 GB) and prune dry run against a temp copy of your registry |
 
@@ -546,7 +584,10 @@ It never deletes anything in the old folder. The check uses `registry.json`, not
 - the real `venvctl init` (not allowed to edit your profile, AutoRun or `.bashrc`)
 - the real first-run migration (blocked by the safety classifier, and not to be run during testing)
 - interactive prompts, which need a console
-- Clink
+- Clink (CMD auto-activate is labelled experimental)
+- repair of real uv ≥ 0.9.9 launchers (this machine has uv 0.8.23; a downloaded newer uv was not allowed to run)
+- real PowerToys File Locksmith (only a fake CLI with its JSON shape)
+- doctor on a machine with PyManager installed
 - oh-my-posh and starship attachment
 - a live VS Code rewriting AutoRun
 - signing
@@ -557,7 +598,7 @@ It never deletes anything in the old folder. The check uses `registry.json`, not
 
 ## 15. Decisions
 
-All of them, with the reasoning, are in `floated.md`: entries 1–16 for WinVenv and pyGo, 17 for the rename to venvctl, and 18–25 for this run.
+All of them, with the reasoning, are in `floated.md`: entries 1–16 for WinVenv and pyGo, 17 for the rename to venvctl, 18–25 for the phased run, and 26–28 for the pre-launch fixes (keeping the name, format-aware repair, aliases by owner).
 
 ---
 
@@ -569,7 +610,9 @@ All of them, with the reasoning, are in `floated.md`: entries 1–16 for WinVenv
 | Release workflow | CI builds artifacts but does not publish |
 | Real icon | placeholders in `winres\` |
 | README | placeholder; you are pasting the draft |
-| Windows Terminal fragment / cached init text | only for Group Policy-locked or antivirus-slowed machines |
+| Windows Terminal profile fragment | the one place the "never runs Activate.ps1" design really beats a Group Policy lock (`powershell -NoExit -Command ...` needs no profile). The README wording you asked for mentions it, so build it before publishing that sentence |
+| Cached init text | only for antivirus-slowed machines |
+| Discovery of AppData envs (pipx, Poetry, Hatch, PDM) and conda | from the competitive research; scan skips `AppData` and needs `pyvenv.cfg` |
 | Junction support | deliberately not built (OneDrive sync breaks) |
 | Multiple projects per central env | registry keeps one `project` |
 | `venvctl doctor --fix` | doctor stays read-only by design |
@@ -598,7 +641,33 @@ Build: `.\build.ps1` (release) or `go build -o venvctl.exe ./cmd/venvctl` (dev).
 
 ---
 
-## 18. Changelog
+## 18. Pre-launch fixes from the competitive research
+
+The research report (`reports\Windows venv tools versus venvctl.md`) found three blockers and several gaps. This run fixed them, one commit per task. R1 and R2 share one commit, and so do L1 and L2, because each pair changes the same function.
+
+| Task | Problem | Fix | Commit |
+|---|---|---|---|
+| R1 (blocker) | uv ≥ 0.9.9 keeps the interpreter path in an RT_RCDATA `UV_PYTHON_PATH` resource; repair byte-replaced inside the `.exe` | format-aware classification; resource rewritten with `UpdateResource` to the relative `python[w].exe`; structured edits only for trailer and distlib launchers; other PE files never touched; `--relative` for distlib; signed-launcher warning | `cffbfa8` |
+| R2 (blocker) | repair read uv's `%~dp0..` as the old path and would hard-code it | relocatable venvs: "nothing to repair" (exit 4); only stale absolute launchers (pip's) are made relative | `cffbfa8` |
+| C1 | central envs needed repair after a move | `create` passes `--relocatable` with uv ≥ 0.2.31; `--no-relocatable` opts out | `0647a90` |
+| D1 (blocker) | doctor called every WindowsApps `python.exe` the Store stub and said to disable it, which breaks PyManager | alias owner read from reparse data and classified; alias check merged into "python on PATH"; `py install --configure` fixes with PyManager; LongPaths `info` with uv ≥ 0.12.14 | `e2213e2` |
+| L1 | Restart Manager can't see directory handles or non-binary files | cwd-inside refusal; read-only File Locksmith fallback through venvctl's refusal list; explanatory message otherwise | `d188159` |
+| L2 | antivirus holds files longer than 800 ms | `nuke --wait` (≤ 60 s), capped exponential backoff, dots, antivirus/EDR and Dev Drive hint | `d188159` |
+| K1 | `off` left a VS Code venv's `Scripts` on PATH | foreign `VIRTUAL_ENV\Scripts` stripped from the saved PATH in all three shells | `628931d` |
+| K2 | Clink auto-activate never ran | labelled "experimental (untested)" in help, `init` output and docs | `89376d6` |
+
+**Premises that didn't hold on this machine:**
+- **uv is 0.8.23**, not ≥ 0.13.
+- **`testdata\uv-trailer-0.8.23.exe` didn't exist.** It was created here from a real uv 0.8.23 `pyflakes.exe`.
+- **The README is still a placeholder.** The required wording is recorded in it instead (see `README.md`).
+
+**Positioning changes from the research:**
+- Don't headline "unaffected by ExecutionPolicy": the hook lives in `$PROFILE`, which needs the same policy.
+- Scope repair to pip/venv and older uv venvs.
+- Name File Locksmith honestly as the broader lock detector.
+- Say venvctl is not related to the `venvctl` package on PyPI.
+
+## 19. Changelog
 
 | Commit | Change |
 |---|---|
@@ -613,4 +682,11 @@ Build: `.\build.ps1` (release) or `go build -o venvctl.exe ./cmd/venvctl` (dev).
 | `9230019` | build: resources, build.ps1, packaging drafts, CI |
 | `8436211` | build: force LF line endings |
 | `18d61bb` | refactor: remaining audit items |
-| (this commit) | docs: json.md, venvctl-complete.md refresh, design.md, floated.md 18–25; `--json link` exit code; `config` `[]` |
+| `a96a8f2` | docs: json.md, venvctl-complete.md refresh, design.md, floated.md 18–25; `--json link` exit code; `config` `[]` |
+| `cffbfa8` | fix(repair)!: format-aware launcher repair; never de-relocate (R1, R2) |
+| `0647a90` | feat(create): relocatable uv venvs by default (C1) |
+| `e2213e2` | fix(doctor): classify App Execution Aliases by owning package (D1) |
+| `d188159` | feat(nuke): see what Restart Manager can't; wait out antivirus (L1, L2) |
+| `628931d` | fix(on): drop a foreign venv's Scripts from the saved PATH (K1) |
+| `89376d6` | docs(cli): mark CMD auto-activate via Clink as experimental, untested (K2) |
+| (this commit) | docs: README wording, venvctl-complete.md section 18, floated.md 26–28, json.md schema updates |

@@ -133,10 +133,34 @@ Doctor's IDE check accepts either a project redirect or a VS Code-family setting
 ## 25. Testing without touching your machine
 Every behaviour test runs against `VENVCTL_HOME` or `LOCALAPPDATA` set to a temp folder, with fake or real temp venvs. Running the real exe without it would trigger the first-run migration on your real `%LOCALAPPDATA%`; the safety classifier blocked that twice, correctly. Commands that edit your profile, AutoRun or `.bashrc` (`venvctl init`) are only run as `--dry-run`. `testdata\autocd.ps1` drives a real PowerShell prompt in its own session, and never loads or writes `$PROFILE`.
 
+## 26. Keep the name venvctl despite the dormant PyPI package
+(You asked for this as decision 18; 18–25 were already taken by the phased run, so it's 26.)
+
+The competitive research found `venvctl` on PyPI: an unrelated "create portable virtual environments" tool by hyperd, v1.4.12, GPL-3.0, with no release since 2021-07-08. It was kept anyway:
+- **It's dormant.** There's been no release in five years, and its audience is Linux deployment.
+- **venvctl doesn't ship on PyPI.** It's a Windows binary distributed through GitHub releases, winget and Scoop, and those names are free. The research found no winget or official Scoop entry, and only two 0-star bash repos named venvctl on GitHub, with no user or org of that name.
+- **A third rename isn't worth it.** WinVenv became pyGo, which became venvctl, and every rename costs hooks, state migration and docs.
+
+The cost is that `pip install venvctl` installs someone else's project, so the README says "Not related to the `venvctl` package on PyPI." If venvctl ever needs a PyPI wrapper, use a different distribution name; the command can stay `venvctl`.
+
+## 27. Repair edits launchers only through formats it understands, and prefers relative paths
+- **Every file in `Scripts\` is classified before it's touched.** The kinds are uv-rcdata, uv-trailer, distlib, text, other-pe and binary. Byte-level edits inside a PE happen only through a known structure: the uv trailer, the distlib shebang line, or Windows' own resource-update API for `UV_PYTHON_PATH`. Any other `.exe` is never modified; it's reported as skipped if it mentions the old path. This replaces the earlier whole-file boundary replace, which corrupted uv ≥ 0.9.9 launchers.
+- **New uv launchers get the relative `python.exe`.** uv's trampoline resolves it against its own folder (`bounce.rs`), so the launcher is relocatable and never needs repair again. Old trailer launchers keep an absolute path, because nobody checked whether old trampolines resolve relatives.
+- **Relocatable venvs are never "repaired" into absolute ones.** That was the R2 blocker. Only launchers with an absolute interpreter that no longer exists are fixed, relatively; pip writes those.
+- **`create` asks uv for relocatable venvs**, so the problem mostly stops existing for envs venvctl makes. Repair's audience is now pip/venv-made and older uv venvs.
+- **Signed launchers.** Rewriting one invalidates its Authenticode signature, and venvctl says so instead of hiding it.
+
+## 28. Doctor judges aliases by who owns them; nuke borrows File Locksmith's eyes, never its hands
+- **An App Execution Alias is classified by its package family name**, read from the reparse data. The App Installer redirector is the Store stub. PyManager and Store CPython aliases are real Pythons, which venvctl must not advise users to disable. The prefixes live in one table, with where each was verified.
+- **venvctl never runs `py.exe` to detect PyManager.** That could start a legacy launcher. It looks only at the aliases. With PyManager present, fixes defer to `py install --configure`, which repairs what doctor only reports.
+- **File Locksmith is a second opinion, never the executioner.** venvctl runs `--json` only, never `--kill`, because `--kill` terminates every locker unfiltered. Its PIDs go through venvctl's editor and shell refusal list and the [y/N] prompt. venvctl keeps the Restart Manager as its first detector because it needs no PowerToys, and falls back only when the rename failed and the Restart Manager named nobody.
+
 ## Open items
 - Run `venvctl init` yourself; your hooks still date from WinVenv.
 - The first `venvctl` run migrates `%LOCALAPPDATA%\pygo`; delete it, and `\winvenv`, after checking `venvctl list`.
-- Clink, oh-my-posh and starship attachment, and interactive prompts are untested here.
+- Upgrade uv to ≥ 0.9.9 and rerun `go test ./internal/envmgr/ -run EndToEnd -v`. It then exercises the resource-format launchers for real.
+- Clink (experimental), oh-my-posh and starship attachment, interactive prompts, real File Locksmith and PyManager machines are untested here.
+- The Windows Terminal profile fragment the README wording mentions is not built.
 - No release workflow, signing certificate, real icon or README text yet.
-- One `project` per central env.
+- One `project` per central env. Scan misses AppData-stored envs (pipx/Poetry/Hatch/PDM) and conda.
 - Killing a venv `python.exe` launcher can orphan its base-interpreter child; Restart Manager lists the child only if it maps venv `.pyd` files.

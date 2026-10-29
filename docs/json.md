@@ -82,7 +82,8 @@ An array of venv objects. Exit 4 when it's empty.
 }
 ```
 
-- `status` is `ok`, `warn` or `fail`. The exit code is 1 only when `failed > 0`.
+- `status` is `ok`, `info` (nothing to fix now, e.g. LongPathsEnabled off while uv handles long paths), `warn` or `fail`. The exit code is 1 only when `failed > 0`.
+- "python on PATH" includes the App Execution Alias check: a PyManager or Store CPython alias passes, the Store redirector fails.
 - Check names are stable. The list can grow, and per-shell checks such as `legacy hook found (WinVenv)` appear only when they apply.
 
 ## `venvctl scan`
@@ -113,7 +114,7 @@ An array of venv objects. Exit 4 when it's empty.
       "freed_bytes": 489366,
       "lockers": [
         {"pid": 1234, "name": "Python", "parent": "Code.exe", "exe": "D:\\...\\python.exe",
-         "open_files": ["D:\\...\\Scripts\\python.exe"], "protected": false}
+         "open_files": ["D:\\...\\Scripts\\python.exe"], "protected": false, "source": "Restart Manager"}
       ],
       "trash": "",
       "swept_trash": [],
@@ -125,6 +126,7 @@ An array of venv objects. Exit 4 when it's empty.
 
 - `status` is one of `deleted`, `would-delete` (`--dry-run`), `unregistered` / `would-unregister` (folder already gone), `refused` or `failed`.
 - `protected` is true for editors and shells, which venvctl never terminates.
+- `source` is `Restart Manager`, or `File Locksmith` for lockers found by the read-only PowerToys fallback (used when the rename fails and the Restart Manager named nobody).
 - `trash` is set when leftovers remain after deleting.
 - `swept_trash` lists older leftover trash folders, of any generation, that were removed alongside.
 - Exit code: 1 if any result failed, else 3 if any was refused.
@@ -162,10 +164,36 @@ Without `--yes` in JSON mode, nothing is deleted: the document is printed and th
 ## `venvctl repair`
 
 ```json
-{"name": "api", "path": "D:\\new\\.venv", "old_path": "D:\\old\\.venv", "files": ["D:\\new\\.venv\\Scripts\\activate.bat"], "dry_run": false, "changed": true}
+{
+  "name": "api",
+  "path": "D:\\new\\.venv",
+  "old_path": "D:\\old\\.venv",
+  "relocatable": false,
+  "fixed": [
+    {"path": "D:\\new\\.venv\\Scripts\\activate.bat", "kind": "text", "from": "D:\\old\\.venv", "to": "D:\\new\\.venv", "signed": false},
+    {"path": "D:\\new\\.venv\\Scripts\\ruff.exe", "kind": "uv-rcdata", "from": "D:\\old\\.venv\\Scripts\\python.exe", "to": "python.exe", "signed": true}
+  ],
+  "skipped": [
+    {"path": "D:\\new\\.venv\\Scripts\\tool.exe", "kind": "other-pe", "reason": "unknown launcher format; not modified (reinstall the package that owns it)"}
+  ],
+  "dry_run": false,
+  "changed": true
+}
 ```
 
-It exits 4 with `"files": []` when the venv already points at its folder.
+- `kind` is one of:
+  - `uv-rcdata` (uv ≥ 0.9.9; the path is in a PE resource)
+  - `uv-trailer` (older uv)
+  - `distlib` (pip)
+  - `text`
+  - `other-pe`
+  - `binary`
+- `from`/`to` are the interpreter path for launchers, or the old/new venv folder for text files.
+- `to` is relative (`python.exe`, `<launcher_dir>\python.exe`) where repair made a launcher relocatable.
+- `signed` means the launcher had an Authenticode signature, which the rewrite invalidates.
+- `skipped` lists files that mention the old path but have no format venvctl edits safely.
+- `old_path` is `""` and `relocatable` is true for relocatable venvs.
+- It exits 4 with `"fixed": []` when nothing needs repair: the venv is already in place, or it's relocatable.
 
 ## `venvctl link` / `venvctl unlink`
 

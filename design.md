@@ -11,7 +11,7 @@ Windows-native Python venv manager. Go, cobra, lipgloss, `x/sys/windows`. uv cre
 | Typing `on` in every terminal | `config auto-activate on`, `allow` | A prompt hook that spawns only when a trusted root changes |
 | `Access is denied` on delete | `nuke`, `prune` | Restart Manager finds lockers, you confirm, they're terminated, then a rename-first delete |
 | Forgotten venvs eating disk | `scan`, `list`, `prune` | Concurrent `pyvenv.cfg` walk, registry, sizes, estimated last activity |
-| Renamed folder breaks venv | `repair` | Boundary-aware path rewrite in `Scripts\`, aware of uv's launcher trailer |
+| Renamed folder breaks venv (pip/venv, older uv) | `repair` | Each `Scripts\` file classified, then edited only through its structure: uv resource set to the relative `python.exe`, uv trailer, distlib shebang, boundary-aware text. Other `.exe` files are never touched. Relocatable venvs, the default for `create`, need none |
 | Central venvs invisible to editors | `create`, `link`, `unlink` | PEP 832 `.venv` redirect file |
 | Misconfigured machine | `doctor` | Read-only checks |
 
