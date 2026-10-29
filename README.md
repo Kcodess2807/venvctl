@@ -89,7 +89,7 @@ When the Restart Manager names no locker, venvctl asks File Locksmith, if it's i
 There are no release downloads yet, so build it from source. You need Go 1.26+.
 
 ```powershell
-git clone <this repo> venvctl; cd venvctl
+git clone https://github.com/Kcodess2807/venvctl; cd venvctl
 go build -o venvctl.exe ./cmd/venvctl
 mkdir "$env:LOCALAPPDATA\venvctl\bin" -Force | Out-Null
 copy venvctl.exe "$env:LOCALAPPDATA\venvctl\bin\"   # then add that folder to your user PATH
