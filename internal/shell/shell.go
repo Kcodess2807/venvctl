@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -227,32 +226,25 @@ func Cd(sh, path string) string {
 	}
 }
 
-// Profiles maps each installed PowerShell ("powershell" = 5.1, "pwsh" = 7) to its
-// CurrentUserCurrentHost profile path, the file $PROFILE names in a console. It reads the
-// Documents known folder instead of spawning PowerShell, which also follows OneDrive redirection.
-func Profiles() map[string]string {
+// Profile is one installed PowerShell and the profile file $PROFILE names in its console.
+type Profile struct{ Shell, Label, Path string }
+
+// Profiles lists the installed PowerShells ("powershell" = 5.1, then "pwsh" = 7) with their
+// CurrentUserCurrentHost profile path. It reads the Documents known folder instead of spawning
+// PowerShell, which also follows OneDrive redirection.
+func Profiles() []Profile {
 	docs, err := windows.KnownFolderPath(windows.FOLDERID_Documents, 0)
 	if err != nil {
 		docs = filepath.Join(os.Getenv("USERPROFILE"), "Documents")
 	}
-	m := map[string]string{}
+	var out []Profile
 	if _, err := exec.LookPath("powershell"); err == nil {
-		m["powershell"] = filepath.Join(docs, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
+		out = append(out, Profile{"powershell", "PowerShell 5.1", filepath.Join(docs, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")})
 	}
 	if _, err := exec.LookPath("pwsh"); err == nil {
-		m["pwsh"] = filepath.Join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1")
+		out = append(out, Profile{"pwsh", "PowerShell 7", filepath.Join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1")})
 	}
-	return m
-}
-
-// PowerShells returns the installed PowerShell names from Profiles, sorted.
-func PowerShells() []string {
-	var names []string
-	for k := range Profiles() {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	return names
+	return out
 }
 
 func hookFile() string { return filepath.Join(envmgr.Dir(), "venvctl_hook.cmd") }
@@ -276,8 +268,8 @@ var (
 // A venvctl hook calling another venvctl.exe (moved, or a dev build) is "stale".
 func Status(exe string) []Hook {
 	var out []Hook
-	for _, ps := range PowerShells() {
-		profile := Profiles()[ps]
+	for _, pr := range Profiles() {
+		ps, profile := pr.Shell, pr.Path
 		b, _ := os.ReadFile(profile)
 		text, _ := decode(b)
 		h := judge(ps, profile, rePwshHook.FindAllStringSubmatch(text, -1), exe)
@@ -291,7 +283,7 @@ func Status(exe string) []Hook {
 	case strings.Contains(strings.ToLower(ar), strings.ToLower(hookFile())):
 		b, _ := os.ReadFile(hookFile())
 		h = judge("cmd", hookFile(), reCmdHook.FindAllStringSubmatch(string(b), -1), exe)
-	case fileExists(hookFile()):
+	case envmgr.FileExists(hookFile()):
 		h = Hook{Shell: "cmd", State: "removed", Detail: "AutoRun no longer calls " + hookFile() + " (rewritten, probably by VS Code)"}
 	default:
 		h = Hook{Shell: "cmd", State: "missing", Detail: `HKCU\Software\Microsoft\Command Processor\AutoRun`}
@@ -300,7 +292,7 @@ func Status(exe string) []Hook {
 	out = append(out, h)
 
 	rc := filepath.Join(os.Getenv("USERPROFILE"), ".bashrc")
-	if _, err := exec.LookPath("bash"); err == nil || fileExists(rc) {
+	if _, err := exec.LookPath("bash"); err == nil || envmgr.FileExists(rc) {
 		b, _ := os.ReadFile(rc)
 		h := judge("bash", rc, reBashHook.FindAllStringSubmatch(string(b), -1), posixPath(exe))
 		h.Legacy = legacyIn(filterProfile(string(b), "", "\n").Removed)
@@ -331,11 +323,6 @@ func judge(sh, where string, matches [][]string, want string) Hook {
 		}
 	}
 	return Hook{Shell: sh, State: "stale", Detail: fmt.Sprintf("%s points at %s", where, matches[0][1])}
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 // AutoRun returns the current HKCU Command Processor AutoRun value.

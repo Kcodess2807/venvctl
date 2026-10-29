@@ -101,7 +101,7 @@ func FindRoot(dir string) string {
 		if proj == "" && isFile(filepath.Join(d, "pyproject.toml")) {
 			proj = d
 		}
-		if fileExists(filepath.Join(d, ".git")) {
+		if FileExists(filepath.Join(d, ".git")) {
 			break
 		}
 		parent := filepath.Dir(d)
@@ -116,8 +116,8 @@ func FindRoot(dir string) string {
 // HasVenv reports whether dir holds a venv the hooks would activate.
 func HasVenv(dir string) bool {
 	return isFile(filepath.Join(dir, ".venv")) ||
-		fileExists(filepath.Join(dir, ".venv", "pyvenv.cfg")) ||
-		fileExists(filepath.Join(dir, "venv", "pyvenv.cfg"))
+		FileExists(filepath.Join(dir, ".venv", "pyvenv.cfg")) ||
+		FileExists(filepath.Join(dir, "venv", "pyvenv.cfg"))
 }
 
 func isFile(p string) bool {

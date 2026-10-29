@@ -2,7 +2,6 @@ package envmgr
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,11 +32,11 @@ type Migration struct {
 
 // NeedsMigration: venvctl has no registry yet and no migration marker, and pyGo's folder has one.
 func NeedsMigration() bool {
-	if fileExists(filepath.Join(Dir(), "registry.json")) || LoadConfig().MigratedFrom != "" {
+	if FileExists(filepath.Join(Dir(), "registry.json")) || LoadConfig().MigratedFrom != "" {
 		return false
 	}
 	old, _ := LegacyDirs()
-	return fileExists(filepath.Join(old, "registry.json"))
+	return FileExists(filepath.Join(old, "registry.json"))
 }
 
 // MigrateFromPygo copies pyGo's registry.json and config.json, moves each central env from
@@ -52,7 +51,7 @@ func MigrateFromPygo() (*Migration, error) {
 	}
 	for _, f := range []string{"registry.json", "config.json"} {
 		src := filepath.Join(old, f)
-		if !fileExists(src) {
+		if !FileExists(src) {
 			continue
 		}
 		if err := copyFile(src, filepath.Join(Dir(), f)); err != nil {
@@ -68,7 +67,7 @@ func MigrateFromPygo() (*Migration, error) {
 			continue
 		}
 		src, dst := filepath.Join(oldEnvs, d.Name()), filepath.Join(CentralDir(), d.Name())
-		if fileExists(dst) {
+		if FileExists(dst) {
 			m.LeftBehind = append(m.LeftBehind, src+": "+dst+" already exists")
 			continue
 		}
@@ -96,23 +95,15 @@ func MigrateFromPygo() (*Migration, error) {
 }
 
 func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	b, err := os.ReadFile(src) // registry.json / config.json: small
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	return os.WriteFile(dst, b, 0o644)
 }
 
-func fileExists(p string) bool {
+// FileExists reports whether p exists (file or folder).
+func FileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }

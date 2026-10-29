@@ -855,12 +855,6 @@ func toLockerJSON(l winapi.Locker) lockerJSON {
 	return lockerJSON{l.PID, l.Name, l.Parent, l.Exe, l.OpenFiles, l.Protected(), l.Source}
 }
 
-// insideDir reports whether p is dir or below it (case-insensitive, path boundary).
-func insideDir(p, dir string) bool {
-	p, dir = strings.ToLower(filepath.Clean(p)), strings.ToLower(filepath.Clean(dir))
-	return p == dir || strings.HasPrefix(p, dir+`\`)
-}
-
 // deleteVenv runs the rename-first delete, printing a dot per retry when --wait is used.
 func deleteVenv(path string, wait time.Duration) error {
 	dots := 0
@@ -893,7 +887,7 @@ func nukeOne(reg *envmgr.Registry, e envmgr.Entry, o nukeOpts) nukeResult {
 	}
 	// The Restart Manager never reports a process whose current folder is inside the venv, and
 	// that includes the shell running venvctl. Catch the commonest case up front.
-	if cwd, err := os.Getwd(); err == nil && insideDir(cwd, e.Path) {
+	if cwd, err := os.Getwd(); err == nil && envmgr.UnderDir(cwd, e.Path) {
 		r.Status = "refused"
 		return fail(exitRefused, "your current directory is inside "+e.Path+"; cd out and retry",
 			"cd to a folder outside the venv (for example the project folder), then rerun venvctl nuke")

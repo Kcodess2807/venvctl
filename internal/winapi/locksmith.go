@@ -2,11 +2,9 @@ package winapi
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"unicode/utf16"
 )
 
 // Lock sources, shown in nuke's locker table.
@@ -17,7 +15,8 @@ const (
 
 // LocksmithCLI returns the PowerToys File Locksmith CLI on PATH (PowerToys 0.97+), or "".
 func LocksmithCLI() string {
-	for _, n := range []string{"PowerToys.FileLocksmith.CLI.exe", "PowerToys.FileLocksmith.CLI", "FileLocksmithCLI.exe"} {
+	// The extension-less name also finds a .cmd (PATHEXT), which the tests' fake CLI uses.
+	for _, n := range []string{"PowerToys.FileLocksmith.CLI.exe", "PowerToys.FileLocksmith.CLI"} {
 		if p, err := exec.LookPath(n); err == nil {
 			return p
 		}
@@ -45,7 +44,7 @@ func LocksmithLockers(cli, dir string) ([]Locker, error) {
 			Files []string `json:"files"`
 		} `json:"processes"`
 	}
-	if err := json.Unmarshal(decodeText(out), &r); err != nil {
+	if err := json.Unmarshal(out, &r); err != nil {
 		return nil, fmt.Errorf("File Locksmith output is not the expected JSON: %w", err)
 	}
 	table := processTable()
@@ -61,21 +60,4 @@ func LocksmithLockers(cli, dir string) ([]Locker, error) {
 		ls = append(ls, l)
 	}
 	return ls, nil
-}
-
-// decodeText turns UTF-16LE output (with or without BOM) into UTF-8; UTF-8 passes through.
-func decodeText(b []byte) []byte {
-	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
-	le := bytes.HasPrefix(b, []byte{0xFF, 0xFE})
-	if !le && !(len(b) >= 2 && b[1] == 0 && b[0] != 0) {
-		return b
-	}
-	if le {
-		b = b[2:]
-	}
-	u := make([]uint16, len(b)/2)
-	for i := range u {
-		u[i] = binary.LittleEndian.Uint16(b[2*i:])
-	}
-	return []byte(string(utf16.Decode(u)))
 }

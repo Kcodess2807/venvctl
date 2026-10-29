@@ -5,7 +5,6 @@ import (
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"unsafe"
@@ -187,13 +186,8 @@ func relativeInterp(cur string) string {
 	return "python.exe"
 }
 
-// underDir reports whether p is dir itself or inside it (case-insensitive, path boundary).
-func underDir(p, dir string) bool {
+// UnderDir reports whether p is dir itself or inside it (case-insensitive, path boundary).
+func UnderDir(p, dir string) bool {
 	p, dir = strings.ToLower(filepath.Clean(p)), strings.ToLower(filepath.Clean(dir))
 	return p == dir || strings.HasPrefix(p, dir+`\`)
-}
-
-func exists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }

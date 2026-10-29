@@ -214,8 +214,6 @@ type Options struct {
 	Remove bool   // remove venvctl and legacy hooks, add nothing
 }
 
-var psNames = map[string]string{"powershell": "PowerShell 5.1", "pwsh": "PowerShell 7"}
-
 // Install updates every selected shell: removes WinVenv/pyGo hooks, then adds the venvctl hook
 // (unless Remove). It returns one Change per shell, even on errors.
 func Install(exe string, o Options) ([]Change, error) {
@@ -231,8 +229,8 @@ func Install(exe string, o Options) ([]Change, error) {
 		if !o.Remove {
 			own = fmt.Sprintf("& '%s' init pwsh | Out-String | Invoke-Expression", psq(exe))
 		}
-		for _, ps := range PowerShells() {
-			c, err := updateFile(psNames[ps], Profiles()[ps], own, o, false)
+		for _, pr := range Profiles() {
+			c, err := updateFile(pr.Label, pr.Path, own, o, false)
 			changes = append(changes, c)
 			errs = append(errs, err)
 		}
@@ -244,7 +242,7 @@ func Install(exe string, o Options) ([]Change, error) {
 	}
 	if want("bash") {
 		rc := filepath.Join(os.Getenv("USERPROFILE"), ".bashrc")
-		if _, err := exec.LookPath("bash"); err == nil || fileExists(rc) {
+		if _, err := exec.LookPath("bash"); err == nil || envmgr.FileExists(rc) {
 			own := ""
 			if !o.Remove {
 				own = fmt.Sprintf(`eval "$('%s' init bash)"`, posix(exe))
@@ -387,24 +385,16 @@ func autoRunValue() (string, uint32) {
 	return v, typ
 }
 
-// decode reads UTF-16 (with BOM), UTF-8 with BOM, or plain bytes as text, and names the
-// encoding so encode can write it back the same way.
+// decode reads UTF-16LE with BOM (what PowerShell 5.1's Out-File writes), UTF-8 with BOM, or
+// plain bytes as text, and names the encoding so encode can write it back the same way.
 func decode(b []byte) (string, string) {
 	switch {
-	case bytes.HasPrefix(b, []byte{0xFF, 0xFE}), bytes.HasPrefix(b, []byte{0xFE, 0xFF}):
-		le := b[0] == 0xFF
+	case bytes.HasPrefix(b, []byte{0xFF, 0xFE}):
 		u := make([]uint16, 0, len(b)/2)
 		for i := 2; i+1 < len(b); i += 2 {
-			if le {
-				u = append(u, uint16(b[i])|uint16(b[i+1])<<8)
-			} else {
-				u = append(u, uint16(b[i])<<8|uint16(b[i+1]))
-			}
+			u = append(u, uint16(b[i])|uint16(b[i+1])<<8)
 		}
-		if le {
-			return string(utf16.Decode(u)), "utf16le"
-		}
-		return string(utf16.Decode(u)), "utf16be"
+		return string(utf16.Decode(u)), "utf16le"
 	case bytes.HasPrefix(b, []byte{0xEF, 0xBB, 0xBF}):
 		return string(b[3:]), "utf8bom"
 	}
@@ -413,18 +403,10 @@ func decode(b []byte) (string, string) {
 
 func encode(s, enc string) []byte {
 	switch enc {
-	case "utf16le", "utf16be":
-		u := utf16.Encode([]rune(s))
+	case "utf16le":
 		out := []byte{0xFF, 0xFE}
-		if enc == "utf16be" {
-			out = []byte{0xFE, 0xFF}
-		}
-		for _, x := range u {
-			if enc == "utf16le" {
-				out = append(out, byte(x), byte(x>>8))
-			} else {
-				out = append(out, byte(x>>8), byte(x))
-			}
+		for _, x := range utf16.Encode([]rune(s)) {
+			out = append(out, byte(x), byte(x>>8))
 		}
 		return out
 	case "utf8bom":

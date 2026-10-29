@@ -122,7 +122,7 @@ func TestFilterAutoRun(t *testing.T) {
 }
 
 func TestEncodingRoundTrip(t *testing.T) {
-	for _, enc := range []string{"utf8", "utf8bom", "utf16le", "utf16be"} {
+	for _, enc := range []string{"utf8", "utf8bom", "utf16le"} {
 		b := encode("Set-Alias ll Get-ChildItem\r\n# ünïcødé\r\n", enc)
 		text, got := decode(b)
 		if got != enc || !bytes.Equal(encode(text, got), b) {

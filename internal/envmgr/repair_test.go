@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,22 +13,14 @@ import (
 
 // ---- helpers ----
 
-// uvVersion returns the installed uv's version, or skips the test when uv is missing.
-func uvVersion(t *testing.T) (string, [3]int) {
+// needUv skips the test when uv is not installed and returns its version.
+func needUv(t *testing.T) [3]int {
 	t.Helper()
-	out, err := exec.Command("uv", "--version").Output()
-	if err != nil {
+	v, ok := UvVersion()
+	if !ok {
 		t.Skip("uv not installed")
 	}
-	m := regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`).FindStringSubmatch(string(out))
-	if m == nil {
-		t.Skipf("cannot parse %q", out)
-	}
-	var v [3]int
-	for i := range v {
-		v[i], _ = strconv.Atoi(m[i+1])
-	}
-	return strings.TrimSpace(string(out)), v
+	return v
 }
 
 func run(t *testing.T, exe string, args ...string) (string, error) {
@@ -230,7 +220,7 @@ func TestRepairSkipsUnknownPE(t *testing.T) {
 // End to end with the installed uv: create, install a console script, move to a path of a
 // different length, repair, run the launchers. Exercises whichever launcher format this uv writes.
 func TestRepairEndToEndCurrentUv(t *testing.T) {
-	ver, v := uvVersion(t)
+	v := needUv(t)
 	root := t.TempDir()
 	venv := filepath.Join(root, "v")
 	uvVenv(t, venv, false)
@@ -241,8 +231,8 @@ func TestRepairEndToEndCurrentUv(t *testing.T) {
 		return Classify(p, b)
 	}
 	format := kind("pyflakes.exe")
-	t.Logf("%s writes %s launchers", ver, format)
-	if (v[0] > 0 || v[1] > 9 || (v[1] == 9 && v[2] >= 9)) && format != KindUvRcdata {
+	t.Logf("uv %d.%d.%d writes %s launchers", v[0], v[1], v[2], format)
+	if UvAtLeast(0, 9, 9) && format != KindUvRcdata {
 		t.Errorf("uv %d.%d.%d should write %s launchers, got %s", v[0], v[1], v[2], KindUvRcdata, format)
 	}
 
@@ -274,7 +264,7 @@ func TestRepairEndToEndCurrentUv(t *testing.T) {
 // R2: relocatable venvs are left alone; only pip-installed launchers with a now-missing
 // absolute interpreter are fixed, relatively.
 func TestRepairRelocatable(t *testing.T) {
-	uvVersion(t)
+	needUv(t)
 	root := t.TempDir()
 	venv := filepath.Join(root, "rel")
 	uvVenv(t, venv, true)

@@ -21,24 +21,9 @@ import (
 
 type Check struct {
 	Name   string
-	OK     bool
-	Warn   bool // not a failure, but worth knowing
-	Info   bool // informational only: nothing to fix right now
+	Status string // "ok", "info" (nothing to fix now), "warn" (worth knowing) or "fail"
 	Detail string
 	Fix    string
-}
-
-// Status is "ok", "info", "warn" or "fail". Warn wins over OK=false.
-func (c Check) Status() string {
-	switch {
-	case c.Warn:
-		return "warn"
-	case !c.OK:
-		return "fail"
-	case c.Info:
-		return "info"
-	}
-	return "ok"
 }
 
 // Run executes every check. exe is the running venvctl.exe, which hooks must point at.
@@ -58,7 +43,7 @@ func Run(exe string) []Check {
 // ideDiscovery warns about central envs an editor cannot see: no project points at them with a
 // .venv redirect, and no VS Code-family settings.json lists the central folder. Read-only.
 func ideDiscovery() Check {
-	c := Check{Name: "IDE discovery of central envs", OK: true}
+	c := Check{Name: "IDE discovery of central envs", Status: "ok"}
 	var central, unlinked []string
 	for _, e := range envmgr.LoadRegistry().Envs {
 		if !e.Central {
@@ -86,7 +71,7 @@ func ideDiscovery() Check {
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = envmgr.CentralDir()
 	}
-	c.Warn = true
+	c.Status = "warn"
 	c.Detail = fmt.Sprintf("%d of %d central envs have no project .venv redirect: %s", len(unlinked), len(central), strings.Join(unlinked, ", "))
 	c.Fix = "run `venvctl link <name>` in each project folder, or add to VS Code settings.json: " +
 		`"python.venvFolders": ["` + strings.ReplaceAll(rel, `\`, `\\`) + `"]`
@@ -191,16 +176,16 @@ func stripJSONC(b []byte) []byte {
 
 // oldStateDirs warns while the pyGo or WinVenv state folders are still on disk.
 func oldStateDirs() Check {
-	c := Check{Name: "old state folders", OK: true, Detail: "none"}
+	c := Check{Name: "old state folders", Status: "ok", Detail: "none"}
 	var found []string
 	pygo, winvenv := envmgr.LegacyDirs()
 	for _, d := range []string{pygo, winvenv} {
-		if fileExists(d) {
+		if envmgr.FileExists(d) {
 			found = append(found, d)
 		}
 	}
 	if len(found) > 0 {
-		c.Warn = true
+		c.Status = "warn"
 		c.Detail = strings.Join(found, ", ") + " still present"
 		c.Fix = "delete it after confirming `venvctl list` shows your envs (and no shell hook still calls an exe inside it)"
 	}
@@ -218,7 +203,7 @@ func pythonsOnPath() []string {
 		if d == "" {
 			continue
 		}
-		if p := filepath.Join(d, "python.exe"); fileExists(p) {
+		if p := filepath.Join(d, "python.exe"); envmgr.FileExists(p) {
 			out = append(out, p)
 		}
 	}
@@ -277,26 +262,26 @@ func pyManagerInstalled() bool {
 // the Store redirector fails, a PyManager or Store CPython alias passes.
 func pythonOnPath() Check {
 	ps := pythonsOnPath()
-	c := Check{Name: "python on PATH", OK: true}
+	c := Check{Name: "python on PATH", Status: "ok"}
 	fix := `Settings > Apps > Advanced app settings > App execution aliases: turn off the "App Installer" python.exe and python3.exe, or install Python from python.org (the Python install manager), whose aliases run a real Python`
 	if pyManagerInstalled() {
 		fix = "run `py install --configure` (PyManager repairs its aliases)"
 	}
 	switch {
 	case len(ps) == 0:
-		c.Warn, c.Detail = true, "no python.exe on PATH"
+		c.Status, c.Detail = "warn", "no python.exe on PATH"
 		c.Fix = "install Python (python.org or `uv python install`); `venvctl create` also finds installs via the registry"
 	case strings.EqualFold(filepath.Dir(ps[0]), windowsApps()):
 		kind, label, l := classifyAlias(ps[0])
 		switch kind {
 		case "stub":
-			c.OK = false
+			c.Status = "fail"
 			c.Detail = "`python` is " + label + ", which opens the Microsoft Store instead of running Python"
 			c.Fix = fix
 		case "python":
 			c.Detail = "`python` is the alias of " + label + ": " + l.Target
 		case "unknown":
-			c.Warn = true
+			c.Status = "warn"
 			c.Detail = "`python` is " + label + ": " + l.Target
 			c.Fix = "check Settings > Apps > Advanced app settings > App execution aliases"
 		default:
@@ -319,9 +304,9 @@ func pythonOnPath() Check {
 
 func interpreters() Check {
 	its := discovery.Interpreters()
-	c := Check{Name: "registered interpreters (PEP 514)", OK: true}
+	c := Check{Name: "registered interpreters (PEP 514)", Status: "ok"}
 	if len(its) == 0 {
-		c.Warn = true
+		c.Status = "warn"
 		c.Detail = "none in the registry (uv-managed Pythons are still usable via `venvctl create --python X.Y`)"
 		return c
 	}
@@ -341,7 +326,7 @@ func interpreters() Check {
 }
 
 func execPolicy() Check {
-	c := Check{Name: "PowerShell ExecutionPolicy", OK: true}
+	c := Check{Name: "PowerShell ExecutionPolicy", Status: "ok"}
 	var bad, seen []string
 	gpo := false // MachinePolicy/UserPolicy decide: Group Policy, which the user cannot override
 	for _, ps := range []string{"pwsh", "powershell"} {
@@ -371,7 +356,7 @@ func execPolicy() Check {
 	}
 	c.Detail = strings.Join(seen, ", ")
 	if len(bad) > 0 {
-		c.OK = false
+		c.Status = "fail"
 		c.Fix = strings.Join(bad, "; ") + ". $PROFILE will not load, so the venvctl hook is inactive."
 		if gpo {
 			c.Fix += " Group Policy wins over -ExecutionPolicy Bypass; ask IT, or start shells with: powershell -NoExit -Command \"venvctl init pwsh | Out-String | iex\""
@@ -384,7 +369,7 @@ func execPolicy() Check {
 
 // cloudVenvs flags registered venvs inside synced folders: thousands of files upload, and locks follow.
 func cloudVenvs() Check {
-	c := Check{Name: "venvs in cloud-synced folders", OK: true}
+	c := Check{Name: "venvs in cloud-synced folders", Status: "ok"}
 	var hits []string
 	for _, e := range envmgr.LoadRegistry().Envs {
 		if envmgr.CloudRoot(e.Path) != "" {
@@ -395,7 +380,7 @@ func cloudVenvs() Check {
 		c.Detail = "none"
 		return c
 	}
-	c.Warn = true
+	c.Status = "warn"
 	c.Detail = strings.Join(hits, ", ")
 	c.Fix = "a venv is ~5-25k files; move it out (`venvctl create <name>` makes a central env) and nuke the synced copy"
 	return c
@@ -407,7 +392,7 @@ func longPaths() Check {
 	if err == nil {
 		defer k.Close()
 		if v, _, err := k.GetIntegerValue("LongPathsEnabled"); err == nil && v == 1 {
-			c.OK, c.Detail = true, "enabled"
+			c.Status, c.Detail = "ok", "enabled"
 			return c
 		}
 	}
@@ -417,19 +402,19 @@ func longPaths() Check {
 	}
 	if envmgr.UvAtLeast(0, 12, 14) {
 		// uv 0.12.14+ installs packages past MAX_PATH by itself; pip and other tools may still fail.
-		c.OK, c.Info = true, true
+		c.Status = "info"
 		c.Detail = "disabled; uv handles long paths itself (0.12.14+), but pip and some tools can still fail on deep paths"
 		return c
 	}
-	c.Warn, c.Detail = true, "disabled; deep site-packages trees can exceed 260 chars"
+	c.Status, c.Detail = "warn", "disabled; deep site-packages trees can exceed 260 chars"
 	return c
 }
 
 func vcRuntime() Check {
-	c := Check{Name: "VC++ 2015-2022 runtime"}
+	c := Check{Name: "VC++ 2015-2022 runtime", Status: "fail"}
 	p := filepath.Join(os.Getenv("SystemRoot"), "System32", "vcruntime140.dll")
-	if fileExists(p) {
-		c.OK, c.Detail = true, p
+	if envmgr.FileExists(p) {
+		c.Status, c.Detail = "ok", p
 		return c
 	}
 	c.Detail = "vcruntime140.dll missing; CPython and many wheels will not start"
@@ -440,25 +425,24 @@ func vcRuntime() Check {
 func uv() Check {
 	c := Check{Name: "uv"}
 	if p, err := exec.LookPath("uv"); err == nil {
-		c.OK, c.Detail = true, p
+		c.Status, c.Detail = "ok", p
 		return c
 	}
-	c.Warn, c.Detail, c.Fix = true, "not installed; `venvctl create` falls back to python -m venv", "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+	c.Status, c.Detail, c.Fix = "warn", "not installed; `venvctl create` falls back to python -m venv", "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
 	return c
 }
 
-// hooks checks every shell's hook against exe, the running venvctl.exe.
 // hooks checks every shell's hook against exe, the running venvctl.exe, and adds one
 // "legacy hook found" warning per shell that still has WinVenv or pyGo hook lines.
 func hooks(exe string) []Check {
-	c := Check{Name: "venvctl shell hooks", OK: true}
+	c := Check{Name: "venvctl shell hooks", Status: "ok"}
 	var have, problems []string
 	var legacy []Check
 	fix := ""
 	for _, h := range shell.Status(exe) {
 		if len(h.Legacy) > 0 {
 			legacy = append(legacy, Check{
-				Name: "legacy hook found (" + strings.Join(h.Legacy, "/") + ")", OK: true, Warn: true,
+				Name: "legacy hook found (" + strings.Join(h.Legacy, "/") + ")", Status: "warn",
 				Detail: h.Shell + ": " + h.Detail, Fix: "run `venvctl init` (it removes old hooks; `venvctl init --dry-run` previews)",
 			})
 		}
@@ -471,7 +455,7 @@ func hooks(exe string) []Check {
 		case "removed":
 			// VS Code's shellStartup mode rewrites the same AutoRun value; say so on its own line.
 			legacy = append(legacy, Check{
-				Name: "venvctl CMD hook removed (AutoRun was rewritten, probably by VS Code)", OK: true, Warn: true,
+				Name: "venvctl CMD hook removed (AutoRun was rewritten, probably by VS Code)", Status: "warn",
 				Detail: h.Detail, Fix: "run `venvctl init cmd` (it keeps VS Code's AutoRun entry and adds venvctl's back)",
 			})
 			problems = append(problems, "cmd: removed from AutoRun")
@@ -487,14 +471,9 @@ func hooks(exe string) []Check {
 	}
 	c.Detail = "installed: " + strings.Join(have, ", ")
 	if len(problems) > 0 {
-		c.Warn = true
+		c.Status = "warn"
 		c.Detail += "; " + strings.Join(problems, "; ")
 		c.Fix = fix
 	}
 	return append([]Check{c}, legacy...)
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }

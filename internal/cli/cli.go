@@ -510,10 +510,10 @@ func doctorCmd() *cobra.Command {
 			fails := 0
 			out := []checkJSON{}
 			for _, c := range checks {
-				if c.Status() == "fail" {
+				if c.Status == "fail" {
 					fails++
 				}
-				out = append(out, checkJSON{c.Name, c.Status(), c.Detail, c.Fix})
+				out = append(out, checkJSON{c.Name, c.Status, c.Detail, c.Fix})
 			}
 			if opt.json {
 				if err := emit(struct {
@@ -524,7 +524,7 @@ func doctorCmd() *cobra.Command {
 				}
 			} else {
 				for _, c := range checks {
-					mark := map[string]string{"ok": okMark(), "info": dim("i"), "warn": warnMark(), "fail": badMark()}[c.Status()]
+					mark := map[string]string{"ok": okMark(), "info": dim("i"), "warn": warnMark(), "fail": badMark()}[c.Status]
 					say("%s %s  %s", mark, bold(c.Name), dim(c.Detail))
 					if c.Fix != "" {
 						say("    → %s", c.Fix)

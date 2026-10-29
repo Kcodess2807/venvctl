@@ -2,6 +2,7 @@ package envmgr
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -84,7 +85,7 @@ func Repair(dir string, o RepairOptions) (*RepairResult, error) {
 		if !filepath.IsAbs(cur) || strings.HasPrefix(cur, launcherDirToken) {
 			return "", false // already relative
 		}
-		stale := (moved && underDir(cur, old)) || (res.Relocatable && !exists(cur))
+		stale := (moved && UnderDir(cur, old)) || (res.Relocatable && !FileExists(cur))
 		if !stale {
 			return "", false
 		}
@@ -143,7 +144,7 @@ func Repair(dir string, o RepairOptions) (*RepairResult, error) {
 				continue
 			}
 			nb = append(append([]byte{}, b[:s]...), to...)
-			nb = append(binaryLE32(nb, uint32(len(to))), b[len(b)-4:]...)
+			nb = append(binary.LittleEndian.AppendUint32(nb, uint32(len(to))), b[len(b)-4:]...)
 			fix.From, fix.To = cur, to
 		case KindDistlib:
 			s, end, _ := shebangSpan(b)
@@ -175,10 +176,6 @@ func Repair(dir string, o RepairOptions) (*RepairResult, error) {
 		res.Fixed = append(res.Fixed, fix)
 	}
 	return res, nil
-}
-
-func binaryLE32(b []byte, v uint32) []byte {
-	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
 }
 
 // relocatableCfg reports `relocatable = true` in pyvenv.cfg (written by `uv venv --relocatable`).
