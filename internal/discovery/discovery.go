@@ -2,6 +2,7 @@
 package discovery
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,17 +214,9 @@ func FindInterpreter(want string) (string, error) {
 		if p, err := exec.LookPath("python"); err == nil {
 			return p, nil
 		}
+		return "", fmt.Errorf("no Python interpreter found (install Python or uv)")
 	}
-	return "", &NotFoundError{Want: want}
-}
-
-type NotFoundError struct{ Want string }
-
-func (e *NotFoundError) Error() string {
-	if e.Want == "" {
-		return "no Python interpreter found (install Python or uv)"
-	}
-	return "no Python " + e.Want + " found in the registry (PEP 514); install it or use uv"
+	return "", fmt.Errorf("no Python %s found in the registry (PEP 514); install it or use uv", want)
 }
 
 func subKeys(root registry.Key, path string) []string {

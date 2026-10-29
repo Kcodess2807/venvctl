@@ -262,9 +262,9 @@ func storeAlias() Check {
 
 func interpreters() Check {
 	its := discovery.Interpreters()
-	c := Check{Name: "registered interpreters (PEP 514)", OK: len(its) > 0}
+	c := Check{Name: "registered interpreters (PEP 514)", OK: true}
 	if len(its) == 0 {
-		c.Warn, c.OK = true, true
+		c.Warn = true
 		c.Detail = "none in the registry (uv-managed Pythons are still usable via `venvctl create --python X.Y`)"
 		return c
 	}
@@ -286,6 +286,7 @@ func interpreters() Check {
 func execPolicy() Check {
 	c := Check{Name: "PowerShell ExecutionPolicy", OK: true}
 	var bad, seen []string
+	gpo := false // MachinePolicy/UserPolicy decide: Group Policy, which the user cannot override
 	for _, ps := range []string{"pwsh", "powershell"} {
 		if _, err := exec.LookPath(ps); err != nil {
 			continue
@@ -308,13 +309,14 @@ func execPolicy() Check {
 		seen = append(seen, fmt.Sprintf("%s=%s (%s)", ps, pol, scope))
 		if pol == "Restricted" || pol == "AllSigned" {
 			bad = append(bad, fmt.Sprintf("%s: %s set by %s", ps, pol, scope))
+			gpo = gpo || strings.HasSuffix(scope, "Policy")
 		}
 	}
 	c.Detail = strings.Join(seen, ", ")
 	if len(bad) > 0 {
 		c.OK = false
 		c.Fix = strings.Join(bad, "; ") + ". $PROFILE will not load, so the venvctl hook is inactive."
-		if strings.Contains(c.Fix, "Policy") { // MachinePolicy/UserPolicy = Group Policy, user cannot override
+		if gpo {
 			c.Fix += " Group Policy wins over -ExecutionPolicy Bypass; ask IT, or start shells with: powershell -NoExit -Command \"venvctl init pwsh | Out-String | iex\""
 		} else {
 			c.Fix += " Run: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
@@ -414,20 +416,16 @@ func hooks(exe string) []Check {
 			}
 		}
 	}
-	c.Detail = "installed: " + orNone(have)
+	if len(have) == 0 {
+		have = []string{"none"}
+	}
+	c.Detail = "installed: " + strings.Join(have, ", ")
 	if len(problems) > 0 {
 		c.Warn = true
 		c.Detail += "; " + strings.Join(problems, "; ")
 		c.Fix = fix
 	}
 	return append([]Check{c}, legacy...)
-}
-
-func orNone(s []string) string {
-	if len(s) == 0 {
-		return "none"
-	}
-	return strings.Join(s, ", ")
 }
 
 func fileExists(p string) bool {
