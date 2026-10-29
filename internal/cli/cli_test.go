@@ -27,7 +27,7 @@ func TestFlagsAndExitCodes(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Chdir(t.TempDir()) // no .venv anywhere above
 
-	empty := filepath.Join(la, "pygo")
+	empty := filepath.Join(la, "venvctl")
 	os.MkdirAll(empty, 0o755)
 
 	cases := []struct {
@@ -41,7 +41,7 @@ func TestFlagsAndExitCodes(t *testing.T) {
 		{"help lists exit codes", []string{"--help"}, 0, "Exit codes:", "", false},
 		{"help groups", []string{"--help"}, 0, "Maintain:", "", false},
 		{"unknown command", []string{"bogus"}, 2, "", "unknown command", false},
-		{"unknown flag", []string{"list", "--bogus"}, 2, "", "→ see `pygo list --help`", false},
+		{"unknown flag", []string{"list", "--bogus"}, 2, "", "→ see `venvctl list --help`", false},
 		{"bad sort", []string{"list", "--sort", "nope"}, 2, "", "use one of: name, size", false},
 		{"bad filter", []string{"list", "--filter", "nope"}, 2, "", "unknown --filter", false},
 		{"bad min-size", []string{"list", "--min-size", "5XB"}, 2, "", "invalid --min-size", false},
@@ -49,24 +49,24 @@ func TestFlagsAndExitCodes(t *testing.T) {
 		{"empty list is nothing to do", []string{"list"}, 4, "", "no environments known yet", false},
 		{"empty json list", []string{"--json", "list"}, 4, "[]", "", true},
 		{"quiet empty list prints nothing", []string{"-q", "list"}, 4, "", "", false},
-		{"version", []string{"version"}, 0, "pyGo dev", "", false},
+		{"version", []string{"version"}, 0, "venvctl dev", "", false},
 		{"json version", []string{"--json", "version"}, 0, `"go":`, "", true},
 		{"quiet version", []string{"--quiet", "version"}, 0, "", "", false},
 		{"nuke needs args", []string{"nuke"}, 2, "", "requires at least 1 arg", false},
-		{"nuke unknown env", []string{"nuke", "ghost"}, 1, "", "→ run `pygo list`", false},
+		{"nuke unknown env", []string{"nuke", "ghost"}, 1, "", "→ run `venvctl list`", false},
 		{"json error on stderr", []string{"--json", "nuke", "ghost"}, 1, "", `"exit_code":1`, false},
 		{"create central needs name", []string{"create"}, 2, "", "needs a name", false},
 		{"create rejects path names", []string{"create", `a\b`}, 2, "", "not a valid env name", false},
 		{"create rejects missing interpreter", []string{"create", "x", "-p", `C:\nope\python.exe`}, 2, "", "no interpreter at", false},
 		{"repair without venv", []string{"repair", "--dry-run"}, 1, "", "no .venv or venv", false},
-		{"on without hook", []string{"on"}, 1, "", "needs the pyGo shell hook", false},
+		{"on without hook", []string{"on"}, 1, "", "needs the venvctl shell hook", false},
 		{"cd needs arg", []string{"cd"}, 2, "", "accepts 1 arg", false},
-		{"completion bash", []string{"completion", "bash"}, 0, "pygo", "", false},
+		{"completion bash", []string{"completion", "bash"}, 0, "venvctl", "", false},
 		{"completion powershell", []string{"completion", "powershell"}, 0, "Register-ArgumentCompleter", "", false},
 		{"completion rejects zsh", []string{"completion", "zsh"}, 2, "", "invalid argument", false},
 		{"init rejects fish", []string{"init", "fish"}, 2, "", "invalid argument", false},
-		{"init pwsh prints hook", []string{"init", "pwsh"}, 0, "function global:pygo", "", false},
-		{"__shell off script", []string{"__shell", "pwsh", "off"}, 0, "_PYGO_OLD_PATH", "", false},
+		{"init pwsh prints hook", []string{"init", "pwsh"}, 0, "function global:venvctl", "", false},
+		{"__shell off script", []string{"__shell", "pwsh", "off"}, 0, "_VENVCTL_OLD_PATH", "", false},
 		{"__shell passes through", []string{"__shell", "bash", "version"}, 0, "", "", false},
 		{"scan json", []string{"--json", "scan", "--dry-run", la}, 0, `"dry_run": true`, "", true},
 	}
@@ -110,8 +110,8 @@ func TestListFiltersOnFakeVenvs(t *testing.T) {
 		{"name": "broken", "path": broken, "python": filepath.Join(filepath.Dir(broken), "base"), "version": "3.9.1"},
 		{"name": "gone", "path": gone, "version": "3.10.0"},
 	}})
-	os.MkdirAll(filepath.Join(la, "pygo"), 0o755)
-	os.WriteFile(filepath.Join(la, "pygo", "registry.json"), reg, 0o644)
+	os.MkdirAll(filepath.Join(la, "venvctl"), 0o755)
+	os.WriteFile(filepath.Join(la, "venvctl", "registry.json"), reg, 0o644)
 
 	run := func(args ...string) (int, string) {
 		var out, errOut bytes.Buffer
@@ -180,8 +180,8 @@ func TestPrune(t *testing.T) {
 		{"name": "broken", "path": broken, "python": filepath.Join(filepath.Dir(broken), "base")},
 		{"name": "gone", "path": gone},
 	}})
-	os.MkdirAll(filepath.Join(la, "pygo"), 0o755)
-	os.WriteFile(filepath.Join(la, "pygo", "registry.json"), reg, 0o644)
+	os.MkdirAll(filepath.Join(la, "venvctl"), 0o755)
+	os.WriteFile(filepath.Join(la, "venvctl", "registry.json"), reg, 0o644)
 
 	run := func(args ...string) (int, string, string) {
 		var out, errOut bytes.Buffer

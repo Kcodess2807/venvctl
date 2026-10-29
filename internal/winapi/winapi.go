@@ -159,14 +159,14 @@ func processTable() map[uint32]procEntry {
 	return m
 }
 
-// protected are editors and shells pygo never terminates; the user closes them.
+// protected are editors and shells venvctl never terminates; the user closes them.
 var protected = map[string]bool{
 	"code.exe": true, "code - insiders.exe": true, "cursor.exe": true, "pycharm64.exe": true,
 	"idea64.exe": true, "devenv.exe": true, "explorer.exe": true, "windowsterminal.exe": true,
 	"pwsh.exe": true, "powershell.exe": true, "cmd.exe": true, "bash.exe": true,
 }
 
-// Protected reports whether pygo must not kill this locker.
+// Protected reports whether venvctl must not kill this locker.
 func (l Locker) Protected() bool { return protected[strings.ToLower(filepath.Base(l.Exe))] }
 
 func exePath(pid uint32) string {

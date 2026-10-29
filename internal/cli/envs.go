@@ -15,9 +15,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"pygo/internal/discovery"
-	"pygo/internal/envmgr"
-	"pygo/internal/winapi"
+	"venvctl/internal/discovery"
+	"venvctl/internal/envmgr"
+	"venvctl/internal/winapi"
 )
 
 // ---- resolving and prompting ----
@@ -32,9 +32,9 @@ func resolve(reg *envmgr.Registry, arg, verb string) (envmgr.Entry, error) {
 	case err == nil:
 		return e, nil
 	case errors.Is(err, envmgr.ErrNoLocalVenv):
-		return e, Fail(exitFail, err.Error(), "cd into a project with a .venv, or pass a name or path (see `pygo list`)")
+		return e, Fail(exitFail, err.Error(), "cd into a project with a .venv, or pass a name or path (see `venvctl list`)")
 	case errors.As(err, &nf):
-		return e, Fail(exitFail, err.Error(), "run `pygo list` to see names, or `pygo scan` to register new venvs")
+		return e, Fail(exitFail, err.Error(), "run `venvctl list` to see names, or `venvctl scan` to register new venvs")
 	case !errors.As(err, &amb):
 		return e, Fail(exitFail, err.Error(), "pass the venv folder path instead")
 	}
@@ -56,7 +56,7 @@ func resolve(reg *envmgr.Registry, arg, verb string) (envmgr.Entry, error) {
 	}
 	var cmds []string
 	for _, h := range amb.Hits {
-		cmds = append(cmds, fmt.Sprintf(`pygo %s "%s"`, verb, h.Path))
+		cmds = append(cmds, fmt.Sprintf(`venvctl %s "%s"`, verb, h.Path))
 	}
 	return envmgr.Entry{}, Fail(exitUsage, amb.Error(), "pick one by path:\n      "+strings.Join(cmds, "\n      "))
 }
@@ -83,12 +83,12 @@ func createCmd() *cobra.Command {
 		GroupID: "use",
 		Short:   "Create a venv: central by default, or .\\.venv with --local (uses uv if installed)",
 		Long: "Creates a venv with `uv venv` when uv is on PATH, else `python -m venv`.\n" +
-			"Central envs live in %LOCALAPPDATA%\\pygo\\envs\\<name>. --local refuses cloud-synced folders\n" +
+			"Central envs live in %LOCALAPPDATA%\\venvctl\\envs\\<name>. --local refuses cloud-synced folders\n" +
 			"(OneDrive, Dropbox, Google Drive, iCloudDrive) unless --force.",
-		Example: `  pygo create api
-  pygo create api --python 3.12
-  pygo create --local -p C:\Python313\python.exe
-  pygo create ml -p 3.11.7 --verbose`,
+		Example: `  venvctl create api
+  venvctl create api --python 3.12
+  venvctl create --local -p C:\Python313\python.exe
+  venvctl create ml -p 3.11.7 --verbose`,
 		Args: nargs(cobra.MaximumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := ""
@@ -104,17 +104,17 @@ func createCmd() *cobra.Command {
 				}
 				if root := envmgr.CloudRoot(dest); root != "" && !force {
 					return Fail(exitRefused, fmt.Sprintf("%s is inside %s, a cloud-synced folder", dest, root),
-						"a venv is 5-25k files that would all sync; use a central env (`pygo create <name>`), or pass --force")
+						"a venv is 5-25k files that would all sync; use a central env (`venvctl create <name>`), or pass --force")
 				}
 			case name == "":
-				return Fail(exitUsage, "a central venv needs a name", "run `pygo create <name>`, or `pygo create --local` for .\\.venv here")
+				return Fail(exitUsage, "a central venv needs a name", "run `venvctl create <name>`, or `venvctl create --local` for .\\.venv here")
 			case name != filepath.Base(name) || name == "." || name == "..":
 				return Fail(exitUsage, fmt.Sprintf("%q is not a valid env name", name), "use a plain name like api or ml-3.12, without slashes")
 			default:
 				dest = filepath.Join(envmgr.CentralDir(), name)
 			}
 			if _, err := os.Stat(filepath.Join(dest, "pyvenv.cfg")); err == nil {
-				return Fail(exitRefused, dest+" already exists", "activate it with `pygo on "+name+"`, or pick another name")
+				return Fail(exitRefused, dest+" already exists", "activate it with `venvctl on "+name+"`, or pick another name")
 			}
 			if py == "" {
 				py = envmgr.LoadConfig().DefaultPython
@@ -144,7 +144,7 @@ func createCmd() *cobra.Command {
 			reg := envmgr.LoadRegistry()
 			reg.Upsert(e)
 			if err := reg.Save(); err != nil {
-				return Fail(exitFail, "venv created but the registry could not be saved: "+err.Error(), "check that %LOCALAPPDATA%\\pygo is writable, then run `pygo scan`")
+				return Fail(exitFail, "venv created but the registry could not be saved: "+err.Error(), "check that %LOCALAPPDATA%\\venvctl is writable, then run `venvctl scan`")
 			}
 			if opt.json {
 				return emit(struct {
@@ -157,7 +157,7 @@ func createCmd() *cobra.Command {
 				}{e.Name, e.Path, e.Python, e.Version, e.Central, cmdline})
 			}
 			say("%s %s  %s  %s", okMark(), bold(e.Name), dim(e.Path), dim("python "+e.Version))
-			say(dim("activate with: pygo on " + e.Name))
+			say(dim("activate with: venvctl on " + e.Name))
 			return nil
 		},
 	}
@@ -325,13 +325,13 @@ func listCmd() *cobra.Command {
 		Aliases: []string{"ls"},
 		GroupID: "find",
 		Short:   "List known venvs with size, status and last use (* marks the active one)",
-		Long: "Lists every registered venv. LAST USED is pyGo's own activation stamp; a value with ~ is\n" +
+		Long: "Lists every registered venv. LAST USED is venvctl's own activation stamp; a value with ~ is\n" +
 			"estimated from the venv's files (newest of the folder, pyvenv.cfg and site-packages).\n" +
 			"Status: missing = folder gone, broken = its base Python is gone.",
-		Example: `  pygo list --sort size
-  pygo list --filter broken
-  pygo list --min-size 500MB --older-than 90d
-  pygo list --paths --filter local | ForEach-Object { pygo repair -n $_ }`,
+		Example: `  venvctl list --sort size
+  venvctl list --filter broken
+  venvctl list --min-size 500MB --older-than 90d
+  venvctl list --paths --filter local | ForEach-Object { venvctl repair -n $_ }`,
 		Args: nargs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			if err := f.parse(); err != nil {
@@ -402,7 +402,7 @@ func listCmd() *cobra.Command {
 			}
 			if len(rows) == 0 {
 				if len(all) == 0 {
-					return nothing("no environments known yet; run `pygo scan` or `pygo create <name>`")
+					return nothing("no environments known yet; run `venvctl scan` or `venvctl create <name>`")
 				}
 				return nothing("no environments match")
 			}
@@ -438,7 +438,7 @@ func sorter(by string) (func(a, b row) bool, error) {
 	return nil, Fail(exitUsage, fmt.Sprintf("unknown --sort %q", by), "use one of: name, size, last-used, version")
 }
 
-// cacheSizes stores computed sizes in the registry so `pygo` (no args) can show a total fast.
+// cacheSizes stores computed sizes in the registry so `venvctl` (no args) can show a total fast.
 func cacheSizes(reg *envmgr.Registry, rows []row) {
 	for _, r := range rows {
 		if r.status != "missing" {
@@ -461,9 +461,9 @@ func scanCmd() *cobra.Command {
 		Long: "Walks the given folders (default: config.json scan_roots, else every fixed drive) for pyvenv.cfg.\n" +
 			"Skips Windows, Program Files, ProgramData, AppData, node_modules, .git and similar.\n" +
 			"The central env folder is always included.",
-		Example: `  pygo scan
-  pygo scan D:\PROJECTS "D:\GRAVITY AI"
-  pygo scan --dry-run`,
+		Example: `  venvctl scan
+  venvctl scan D:\PROJECTS "D:\GRAVITY AI"
+  venvctl scan --dry-run`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			roots := args
 			if len(roots) == 0 {
@@ -512,7 +512,7 @@ func scanCmd() *cobra.Command {
 			}
 			if !dry {
 				if err := reg.Save(); err != nil {
-					return Fail(exitFail, "could not save the registry: "+err.Error(), "check that %LOCALAPPDATA%\\pygo is writable")
+					return Fail(exitFail, "could not save the registry: "+err.Error(), "check that %LOCALAPPDATA%\\venvctl is writable")
 				}
 			}
 			took := time.Since(start)
@@ -602,6 +602,7 @@ type nukeResult struct {
 	FreedBytes int64        `json:"freed_bytes"`
 	Lockers    []lockerJSON `json:"lockers"`
 	Trash      string       `json:"trash"`
+	SweptTrash []string     `json:"swept_trash"` // older leftover trash folders removed alongside
 	Error      string       `json:"error"`
 	err        *exitError
 }
@@ -625,9 +626,9 @@ func nukeCmd() *cobra.Command {
 		Long: "Finds processes holding the venv's .exe/.dll/.pyd files (Windows Restart Manager), shows them,\n" +
 			"and asks before terminating them. Editors and shells (VS Code, PyCharm, PowerShell, ...) are never\n" +
 			"terminated. The venv is renamed away before deleting, so a locked venv is never half-deleted.",
-		Example: `  pygo nuke old-api
-  pygo nuke D:\PROJECTS\x\.venv --dry-run
-  pygo nuke a b c --force`,
+		Example: `  venvctl nuke old-api
+  venvctl nuke D:\PROJECTS\x\.venv --dry-run
+  venvctl nuke a b c --force`,
 		Args: nargs(cobra.MinimumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			reg := envmgr.LoadRegistry()
@@ -660,7 +661,7 @@ func finishNuke(reg *envmgr.Registry, targets []envmgr.Entry, force, dry bool) e
 	}
 	if !dry {
 		if err := reg.Save(); err != nil {
-			printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `pygo scan` to resync it"})
+			printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `venvctl scan` to resync it"})
 		}
 	}
 	code := exitOK
@@ -686,7 +687,7 @@ func finishNuke(reg *envmgr.Registry, targets []envmgr.Entry, force, dry bool) e
 }
 
 func nukeOne(reg *envmgr.Registry, e envmgr.Entry, force, dry bool) nukeResult {
-	r := nukeResult{Name: e.Name, Path: e.Path, Lockers: []lockerJSON{}}
+	r := nukeResult{Name: e.Name, Path: e.Path, Lockers: []lockerJSON{}, SweptTrash: []string{}}
 	fail := func(code int, msg, fix string) nukeResult {
 		r.err = &exitError{code: code, msg: msg, fix: fix}
 		r.Error = msg
@@ -725,14 +726,16 @@ func nukeOne(reg *envmgr.Registry, e envmgr.Entry, force, dry bool) nukeResult {
 		if errors.As(err, &lo) {
 			reg.Remove(e.Path)
 			r.Status, r.Trash, r.FreedBytes = "deleted", lo.Trash, size-envmgr.Size(lo.Trash)
-			return fail(exitFail, "leftovers remain in "+lo.Trash, `close whatever still uses them, then run: pygo nuke "`+lo.Trash+`"`)
+			return fail(exitFail, "leftovers remain in "+lo.Trash, `close whatever still uses them, then run: venvctl nuke "`+lo.Trash+`"`)
 		}
 		r.Status = "failed"
 		return fail(exitFail, e.Path+" is still locked; nothing was deleted",
-			"close the program using it (`pygo nuke --dry-run "+e.Name+"` lists lockers), then retry")
+			"close the program using it (`venvctl nuke --dry-run "+e.Name+"` lists lockers), then retry")
 	}
 	reg.Remove(e.Path)
 	r.Status, r.FreedBytes = "deleted", size
+	swept, freed := envmgr.SweepTrash(e.Path) // leftovers of earlier interrupted deletes, any generation
+	r.SweptTrash, r.FreedBytes = append(r.SweptTrash, swept...), r.FreedBytes+freed
 	return r
 }
 
@@ -742,6 +745,9 @@ func printNuke(r nukeResult) {
 		say("%s nuked %s  %s  %s", okMark(), bold(r.Name), dim(r.Path), "freed "+human(r.FreedBytes))
 		if r.Trash != "" {
 			say("    leftovers: %s", r.Trash)
+		}
+		for _, t := range r.SweptTrash {
+			say("    also removed old trash: %s", dim(t))
 		}
 	case "unregistered", "would-unregister":
 		say("%s %s  %s", okMark(), r.Name, dim("folder already gone, "+strings.TrimPrefix(r.Status, "would-")+" "+r.Path))
@@ -793,7 +799,7 @@ func killLockers(dir string, lockers []winapi.Locker, force bool) error {
 	}
 	if len(blocked) > 0 {
 		return Fail(exitRefused, strings.Join(blocked, ", ")+" hold files in "+dir,
-			"pyGo never terminates editors or shells; close them (or their Python terminal), then retry")
+			"venvctl never terminates editors or shells; close them (or their Python terminal), then retry")
 	}
 	if !force {
 		if !interactive() {
@@ -823,13 +829,13 @@ func pruneCmd() *cobra.Command {
 		Short:   "Delete many venvs at once: old, big, missing or broken ones",
 		Long: "Selects venvs matching ALL given criteria (--missing and --broken together mean either),\n" +
 			"shows them with sizes and a total, then asks once before deleting. Each deletion goes through\n" +
-			"the same path as `pygo nuke`: lock detection, editor protection, rename-first delete.\n" +
+			"the same path as `venvctl nuke`: lock detection, editor protection, rename-first delete.\n" +
 			"Refused venvs are skipped and listed at the end. The active venv is never pruned.\n" +
 			"--missing entries are only unregistered; their folders are already gone.",
-		Example: `  pygo prune --older-than 180d --dry-run
-  pygo prune --min-size 1GB --older-than 90d
-  pygo prune --missing --yes
-  pygo --json prune --broken --local --yes`,
+		Example: `  venvctl prune --older-than 180d --dry-run
+  venvctl prune --min-size 1GB --older-than 90d
+  venvctl prune --missing --yes
+  venvctl --json prune --broken --local --yes`,
 		Args: nargs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			if central && local {
@@ -837,7 +843,7 @@ func pruneCmd() *cobra.Command {
 			}
 			if !missing && !broken && f.olderThan == "" && f.minSize == "" {
 				return Fail(exitUsage, "prune needs at least one criterion",
-					"add --older-than, --min-size, --missing or --broken (see `pygo prune --help`)")
+					"add --older-than, --min-size, --missing or --broken (see `venvctl prune --help`)")
 			}
 			if central {
 				f.filter = "central"
@@ -916,7 +922,7 @@ func pruneCmd() *cobra.Command {
 					}
 				}
 				if err := reg.Save(); err != nil {
-					printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `pygo scan` to resync it"})
+					printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `venvctl scan` to resync it"})
 					code = exitFail
 				}
 			}
@@ -953,7 +959,7 @@ func pruneCmd() *cobra.Command {
 	return c
 }
 
-// pruneJSON is the --json shape of `pygo prune` (see docs/json.md).
+// pruneJSON is the --json shape of `venvctl prune` (see docs/json.md).
 type pruneJSON struct {
 	Candidates []rowJSON    `json:"candidates"`
 	TotalBytes int64        `json:"total_bytes"`
@@ -973,9 +979,9 @@ func repairCmd() *cobra.Command {
 		Long: "Reads the venv's previous location from Scripts\\activate.bat and rewrites it, at path\n" +
 			"boundaries only, in every file in Scripts\\, including pip and uv launcher .exe files.\n" +
 			"Rewriting .exe files can alert antivirus; use --dry-run to preview.",
-		Example: `  pygo repair
-  pygo repair --dry-run D:\PROJECTS\renamed\.venv
-  pygo repair api`,
+		Example: `  venvctl repair
+  venvctl repair --dry-run D:\PROJECTS\renamed\.venv
+  venvctl repair api`,
 		Args: nargs(cobra.MaximumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			target := ""
@@ -1000,7 +1006,7 @@ func repairCmd() *cobra.Command {
 				}
 				reg.Upsert(e)
 				if err := reg.Save(); err != nil {
-					return Fail(exitFail, "repaired, but the registry could not be saved: "+err.Error(), "run `pygo scan` to resync it")
+					return Fail(exitFail, "repaired, but the registry could not be saved: "+err.Error(), "run `venvctl scan` to resync it")
 				}
 			}
 			if opt.json {

@@ -16,9 +16,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/windows"
 
-	"pygo/internal/doctor"
-	"pygo/internal/envmgr"
-	"pygo/internal/shell"
+	"venvctl/internal/doctor"
+	"venvctl/internal/envmgr"
+	"venvctl/internal/shell"
 )
 
 // Exit codes. Keep in sync with exitHelp.
@@ -34,10 +34,10 @@ const exitHelp = `Exit codes:
   0  success (doctor warnings included)
   1  failure
   2  usage error: unknown command, bad flag or argument
-  3  refused: pyGo declined to act, e.g. an editor holds the venv or you answered no
+  3  refused: venvctl declined to act, e.g. an editor holds the venv or you answered no
   4  nothing to do: no matching venvs, or nothing needed changing`
 
-// Set at build time: -ldflags "-X pygo/internal/cli.version=1.2.3 -X pygo/internal/cli.buildDate=2026-10-29"
+// Set at build time: -ldflags "-X venvctl/internal/cli.version=1.2.3 -X venvctl/internal/cli.buildDate=2026-10-29"
 var (
 	version   = "dev"
 	buildDate = ""
@@ -53,7 +53,7 @@ var (
 
 type options struct{ json, quiet, noColor bool }
 
-// Run executes pygo with args and returns the process exit code.
+// Run executes venvctl with args and returns the process exit code.
 func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 	stdout, stderr, stdin, opt, color = out, errOut, in, options{}, false
 	root := newRoot()
@@ -66,19 +66,21 @@ func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 
 func newRoot() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "pygo",
-		Short: "pyGo: Windows-native Python virtual environment manager",
-		Long: "pyGo activates, finds, deletes, repairs and diagnoses Python virtual environments on Windows,\n" +
-			"in PowerShell, CMD and Git Bash. Run `pygo` with no arguments for a status overview.\n\n" + exitHelp,
-		Example: `  pygo                    status overview
-  pygo on                 activate the nearest .venv
-  pygo list --sort size   biggest venvs first
-  pygo --json doctor      machine-readable diagnosis`,
+		Use:   "venvctl",
+		Short: "venvctl — control your Python virtual environments on Windows",
+		Long: "venvctl — control your Python virtual environments on Windows\n\n" +
+			"Activates, finds, deletes, repairs and diagnoses venvs in PowerShell, CMD and Git Bash.\n" +
+			"Run `venvctl` with no arguments for a status overview.\n\n" + exitHelp,
+		Example: `  venvctl                    status overview
+  venvctl on                 activate the nearest .venv
+  venvctl list --sort size   biggest venvs first
+  venvctl --json doctor      machine-readable diagnosis`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(*cobra.Command, []string) {
 			color = useColor()
+			migrate()
 		},
 		RunE: func(*cobra.Command, []string) error { return overview() },
 	}
@@ -118,7 +120,7 @@ type exitError struct {
 
 func (e *exitError) Error() string { return e.msg }
 
-// Fail returns an error that prints "✗ msg" then "  → fix", and makes pygo exit with code.
+// Fail returns an error that prints "✗ msg" then "  → fix", and makes venvctl exit with code.
 func Fail(code int, msg, fix string) error { return &exitError{code: code, msg: msg, fix: fix} }
 
 // nothing ends a command with exit 4 and msg shown as a plain note.
@@ -172,7 +174,7 @@ func classify(err error) *exitError {
 	for _, p := range []string{"unknown command", "unknown flag", "unknown shorthand", "invalid argument",
 		"accepts ", "requires at least", "requires exactly", "flag needs an argument"} {
 		if strings.HasPrefix(msg, p) {
-			return &exitError{code: exitUsage, msg: msg, fix: "see `pygo --help`"}
+			return &exitError{code: exitUsage, msg: msg, fix: "see `venvctl --help`"}
 		}
 	}
 	return &exitError{code: exitFail, msg: msg, fix: "unexpected error; rerun, and if it repeats report it with the command and this output"}
@@ -307,9 +309,42 @@ func table(w io.Writer, header []string, rows [][]string, right ...int) {
 func exePath() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "pygo.exe"
+		return "venvctl.exe"
 	}
 	return exe
+}
+
+// migrate moves pyGo's state into venvctl's folder the first time venvctl runs, and prints a
+// one-time summary on stderr (so --json stdout stays clean). See envmgr.MigrateFromPygo.
+func migrate() {
+	if !envmgr.NeedsMigration() {
+		return
+	}
+	m, err := envmgr.MigrateFromPygo()
+	if opt.quiet && err == nil && len(m.LeftBehind)+len(m.RepairFailed) == 0 {
+		return
+	}
+	w := stderr
+	fmt.Fprintf(w, "%s first run: migrated pyGo state from %s to %s\n", okMark(), m.From, envmgr.Dir())
+	if len(m.Copied) > 0 {
+		fmt.Fprintf(w, "    copied %s\n", strings.Join(m.Copied, ", "))
+	}
+	for _, p := range m.Moved {
+		fmt.Fprintf(w, "    moved and repaired central env %s\n", p)
+	}
+	for _, p := range m.LeftBehind {
+		fmt.Fprintf(w, "%s left in place (registry still points there): %s\n", warnMark(), p)
+	}
+	for _, p := range m.RepairFailed {
+		dir, _, _ := strings.Cut(p, ": ")
+		fmt.Fprintf(w, "%s repair failed: %s\n    → run: venvctl repair \"%s\"\n", warnMark(), p, dir)
+	}
+	if err != nil {
+		printErr(&exitError{code: exitFail, msg: "migration stopped: " + err.Error(),
+			fix: "your pyGo folder is untouched apart from moved envs; fix the problem, delete " + envmgr.Dir() + `\registry.json and rerun`})
+		return
+	}
+	fmt.Fprintf(w, "    the old folder %s is left for you to delete once `venvctl list` looks right\n", m.From)
 }
 
 // ---- version, completion, overview, doctor ----
@@ -318,9 +353,9 @@ func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "version",
 		GroupID: "setup",
-		Short:   "Show the pyGo version, commit, build date and Go version",
-		Example: `  pygo version
-  pygo --json version`,
+		Short:   "Show the venvctl version, commit, build date and Go version",
+		Example: `  venvctl version
+  venvctl --json version`,
 		Args: nargs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			v := struct {
@@ -343,7 +378,7 @@ func versionCmd() *cobra.Command {
 			if opt.json {
 				return emit(v)
 			}
-			say("pyGo %s", v.Version)
+			say("venvctl %s", v.Version)
 			say("  commit  %s", orDash(v.Commit))
 			say("  built   %s", orDash(v.BuildDate))
 			say("  go      %s", v.Go)
@@ -366,9 +401,9 @@ func completionCmd(root *cobra.Command) *cobra.Command {
 		GroupID:   "setup",
 		Short:     "Print a tab-completion script for PowerShell or Git Bash",
 		ValidArgs: []string{"powershell", "bash"},
-		Example: `  pygo completion powershell | Out-String | Invoke-Expression
-  pygo completion powershell >> $PROFILE
-  eval "$(pygo completion bash)"`,
+		Example: `  venvctl completion powershell | Out-String | Invoke-Expression
+  venvctl completion powershell >> $PROFILE
+  eval "$(venvctl completion bash)"`,
 		Args: nargs(cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if args[0] == "bash" {
@@ -379,7 +414,7 @@ func completionCmd(root *cobra.Command) *cobra.Command {
 	}
 }
 
-// overview is `pygo` with no arguments: one screen of status.
+// overview is `venvctl` with no arguments: one screen of status.
 func overview() error {
 	reg := envmgr.LoadRegistry()
 	var total int64
@@ -433,24 +468,24 @@ func overview() error {
 		}
 		hs = append(hs, h.Shell+" "+st)
 	}
-	size := "sizes unknown until `pygo list`"
+	size := "sizes unknown until `venvctl list`"
 	if total > 0 {
 		size = human(total) + dim(" (as of last list)")
 	}
-	say("%s %s  %s", bold("pyGo"), version, dim(exePath()))
+	say("%s %s  %s", bold("venvctl"), version, dim(exePath()))
 	say("")
 	say("  active   %s", activeText)
 	say("  here     %s", nearText)
 	say("  known    %d venvs, %s", len(reg.Envs), size)
 	say("  hooks    %s", strings.Join(hs, ", "))
 	say("")
-	say("  pygo on [name]       activate (nearest .venv by default)")
-	say("  pygo list            every venv with size and last use")
-	say("  pygo create <name>   new central venv (uses uv if installed)")
-	say("  pygo nuke <name>     delete a venv, unlocking its files first")
-	say("  pygo doctor          diagnose this machine")
+	say("  venvctl on [name]       activate (nearest .venv by default)")
+	say("  venvctl list            every venv with size and last use")
+	say("  venvctl create <name>   new central venv (uses uv if installed)")
+	say("  venvctl nuke <name>     delete a venv, unlocking its files first")
+	say("  venvctl doctor          diagnose this machine")
 	say("")
-	say(dim("pygo --help for all commands"))
+	say(dim("venvctl --help for all commands"))
 	return nil
 }
 
@@ -460,8 +495,8 @@ func doctorCmd() *cobra.Command {
 		GroupID: "maintain",
 		Short:   "Diagnose PATH, Store stubs, ExecutionPolicy, long paths, VC++, uv, hooks, cloud folders",
 		Long:    "Runs read-only checks and prints a fix for each problem. Warnings exit 0; only failed checks exit 1.",
-		Example: `  pygo doctor
-  pygo --json doctor`,
+		Example: `  venvctl doctor
+  venvctl --json doctor`,
 		Args: nargs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			checks := doctor.Run(exePath())
@@ -496,7 +531,7 @@ func doctorCmd() *cobra.Command {
 				}
 			}
 			if fails > 0 {
-				return Fail(exitFail, fmt.Sprintf("%d check(s) failed", fails), "apply the fixes above, then rerun `pygo doctor`")
+				return Fail(exitFail, fmt.Sprintf("%d check(s) failed", fails), "apply the fixes above, then rerun `venvctl doctor`")
 			}
 			return nil
 		},

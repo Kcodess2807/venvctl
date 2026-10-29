@@ -1,5 +1,5 @@
 // Package doctor diagnoses the Windows Python setup: PATH order, Store stubs, ExecutionPolicy,
-// long paths, VC++ runtime, uv, and whether the pygo shell hooks are installed.
+// long paths, VC++ runtime, uv, and whether the venvctl shell hooks are installed.
 package doctor
 
 import (
@@ -11,10 +11,10 @@ import (
 
 	"golang.org/x/sys/windows/registry"
 
-	"pygo/internal/discovery"
-	"pygo/internal/envmgr"
-	"pygo/internal/shell"
-	"pygo/internal/winapi"
+	"venvctl/internal/discovery"
+	"venvctl/internal/envmgr"
+	"venvctl/internal/shell"
+	"venvctl/internal/winapi"
 )
 
 type Check struct {
@@ -36,9 +36,9 @@ func (c Check) Status() string {
 	return "ok"
 }
 
-// Run executes every check. exe is the running pygo.exe, which hooks must point at.
+// Run executes every check. exe is the running venvctl.exe, which hooks must point at.
 func Run(exe string) []Check {
-	return []Check{
+	checks := []Check{
 		pythonOnPath(),
 		storeAlias(),
 		interpreters(),
@@ -46,9 +46,27 @@ func Run(exe string) []Check {
 		longPaths(),
 		vcRuntime(),
 		uv(),
-		hooks(exe),
-		cloudVenvs(),
 	}
+	checks = append(checks, hooks(exe)...)
+	return append(checks, oldStateDirs(), cloudVenvs())
+}
+
+// oldStateDirs warns while the pyGo or WinVenv state folders are still on disk.
+func oldStateDirs() Check {
+	c := Check{Name: "old state folders", OK: true, Detail: "none"}
+	var found []string
+	pygo, winvenv := envmgr.LegacyDirs()
+	for _, d := range []string{pygo, winvenv} {
+		if fileExists(d) {
+			found = append(found, d)
+		}
+	}
+	if len(found) > 0 {
+		c.Warn = true
+		c.Detail = strings.Join(found, ", ") + " still present"
+		c.Fix = "delete it after confirming `venvctl list` shows your envs (and no shell hook still calls an exe inside it)"
+	}
+	return c
 }
 
 func windowsApps() string {
@@ -74,7 +92,7 @@ func pythonOnPath() Check {
 	c := Check{Name: "python on PATH"}
 	switch {
 	case len(ps) == 0:
-		c.Warn, c.Detail, c.Fix = true, "no python.exe on PATH", "install Python (python.org or `uv python install`) or use `pygo create` which finds installs via the registry"
+		c.Warn, c.Detail, c.Fix = true, "no python.exe on PATH", "install Python (python.org or `uv python install`) or use `venvctl create` which finds installs via the registry"
 	case strings.EqualFold(filepath.Dir(ps[0]), windowsApps()):
 		c.Detail = "`python` resolves to the Microsoft Store stub: " + ps[0]
 		c.Fix = "Settings > Apps > Advanced app settings > App execution aliases: turn off python.exe and python3.exe, or install Python and move it ahead of WindowsApps in PATH"
@@ -111,7 +129,7 @@ func interpreters() Check {
 	c := Check{Name: "registered interpreters (PEP 514)", OK: len(its) > 0}
 	if len(its) == 0 {
 		c.Warn, c.OK = true, true
-		c.Detail = "none in the registry (uv-managed Pythons are still usable via `pygo create --python X.Y`)"
+		c.Detail = "none in the registry (uv-managed Pythons are still usable via `venvctl create --python X.Y`)"
 		return c
 	}
 	var vs []string
@@ -159,9 +177,9 @@ func execPolicy() Check {
 	c.Detail = strings.Join(seen, ", ")
 	if len(bad) > 0 {
 		c.OK = false
-		c.Fix = strings.Join(bad, "; ") + ". $PROFILE will not load, so the pygo hook is inactive."
+		c.Fix = strings.Join(bad, "; ") + ". $PROFILE will not load, so the venvctl hook is inactive."
 		if strings.Contains(c.Fix, "Policy") { // MachinePolicy/UserPolicy = Group Policy, user cannot override
-			c.Fix += " Group Policy wins over -ExecutionPolicy Bypass; ask IT, or start shells with: powershell -NoExit -Command \"pygo init pwsh | Out-String | iex\""
+			c.Fix += " Group Policy wins over -ExecutionPolicy Bypass; ask IT, or start shells with: powershell -NoExit -Command \"venvctl init pwsh | Out-String | iex\""
 		} else {
 			c.Fix += " Run: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
 		}
@@ -184,7 +202,7 @@ func cloudVenvs() Check {
 	}
 	c.Warn = true
 	c.Detail = strings.Join(hits, ", ")
-	c.Fix = "a venv is ~5-25k files; move it out (`pygo create <name>` makes a central env) and nuke the synced copy"
+	c.Fix = "a venv is ~5-25k files; move it out (`venvctl create <name>` makes a central env) and nuke the synced copy"
 	return c
 }
 
@@ -221,31 +239,40 @@ func uv() Check {
 		c.OK, c.Detail = true, p
 		return c
 	}
-	c.Warn, c.Detail, c.Fix = true, "not installed; `pygo create` falls back to python -m venv", "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+	c.Warn, c.Detail, c.Fix = true, "not installed; `venvctl create` falls back to python -m venv", "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
 	return c
 }
 
-// hooks checks every shell's hook against exe, the running pygo.exe.
-func hooks(exe string) Check {
-	c := Check{Name: "pygo shell hooks", OK: true}
+// hooks checks every shell's hook against exe, the running venvctl.exe.
+// hooks checks every shell's hook against exe, the running venvctl.exe, and adds one
+// "legacy hook found" warning per shell that still has WinVenv or pyGo hook lines.
+func hooks(exe string) []Check {
+	c := Check{Name: "venvctl shell hooks", OK: true}
 	var have, problems []string
+	var legacy []Check
 	fix := ""
 	for _, h := range shell.Status(exe) {
+		if len(h.Legacy) > 0 {
+			legacy = append(legacy, Check{
+				Name: "legacy hook found (" + strings.Join(h.Legacy, "/") + ")", OK: true, Warn: true,
+				Detail: h.Shell + ": " + h.Detail, Fix: "run `venvctl init` (it removes old hooks; `venvctl init --dry-run` previews)",
+			})
+		}
 		switch h.State {
 		case "ok":
 			have = append(have, h.Shell)
 		case "stale":
 			problems = append(problems, fmt.Sprintf("%s: stale hook (%s)", h.Shell, h.Detail))
-			fix = "run `pygo init` to point the hooks at " + exe + ", then restart the shell"
+			fix = "run `venvctl init` to point the hooks at " + exe + ", then restart the shell"
 		case "removed":
-			problems = append(problems, "cmd: pyGo CMD hook removed ("+h.Detail+")")
+			problems = append(problems, "cmd: venvctl CMD hook removed ("+h.Detail+")")
 			if fix == "" {
-				fix = "run `pygo init cmd`"
+				fix = "run `venvctl init cmd`"
 			}
 		default:
 			problems = append(problems, h.Shell+": missing")
 			if fix == "" {
-				fix = "run `pygo init` and restart the shell"
+				fix = "run `venvctl init` and restart the shell"
 			}
 		}
 	}
@@ -255,7 +282,7 @@ func hooks(exe string) Check {
 		c.Detail += "; " + strings.Join(problems, "; ")
 		c.Fix = fix
 	}
-	return c
+	return append([]Check{c}, legacy...)
 }
 
 func orNone(s []string) string {

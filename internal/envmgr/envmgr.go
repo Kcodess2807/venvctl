@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"pygo/internal/discovery"
+	"venvctl/internal/discovery"
 )
 
 // Entry is one known virtual environment.
@@ -32,19 +32,46 @@ type Entry struct {
 	Project  string    `json:"project,omitempty"` // folder holding the .venv redirect file, if any
 }
 
-// Registry is %LOCALAPPDATA%\pygo\registry.json.
+// Registry is %LOCALAPPDATA%\venvctl\registry.json.
 type Registry struct {
 	Envs []Entry `json:"envs"`
 }
 
-// Config is %LOCALAPPDATA%\pygo\config.json.
+// Config is %LOCALAPPDATA%\venvctl\config.json.
 type Config struct {
 	ScanRoots     []string `json:"scan_roots"`
 	DefaultPython string   `json:"default_python"`
+	AutoActivate  bool     `json:"auto_activate"`
+	MigratedFrom  string   `json:"migrated_from,omitempty"`
+	MigratedAt    string   `json:"migrated_at,omitempty"`
 }
 
-func Dir() string        { return filepath.Join(os.Getenv("LOCALAPPDATA"), "pygo") }
+// Dir is the state folder: VENVCTL_HOME if set, else %LOCALAPPDATA%\venvctl.
+func Dir() string {
+	if h := os.Getenv("VENVCTL_HOME"); h != "" {
+		return h
+	}
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "venvctl")
+}
+
 func CentralDir() string { return filepath.Join(Dir(), "envs") }
+
+// SetConfig sets one key in config.json, keeping every other key (including unknown ones).
+func SetConfig(key string, value any) error {
+	p := filepath.Join(Dir(), "config.json")
+	m := map[string]any{}
+	if b, err := os.ReadFile(p); err == nil {
+		if err := json.Unmarshal(b, &m); err != nil {
+			return fmt.Errorf("%s is not valid JSON: %w", p, err)
+		}
+	}
+	m[key] = value
+	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(m, "", "  ")
+	return os.WriteFile(p, b, 0o644)
+}
 
 func LoadConfig() Config {
 	var c Config
@@ -271,7 +298,7 @@ func CloudRoot(path string) string {
 	return ""
 }
 
-// Activity is the best guess of when a venv was last used: pygo's own last_used stamp, or the
+// Activity is the best guess of when a venv was last used: venvctl's own last_used stamp, or the
 // newest modification time of the venv folder, pyvenv.cfg or site-packages (changes on install).
 func Activity(e Entry) time.Time {
 	t := e.LastUsed
@@ -301,7 +328,7 @@ func Size(dir string) int64 {
 // half-deleted, then removes the trash. Retries with backoff because handles (killed processes,
 // antivirus scans) release a little late.
 func Delete(dir string) error {
-	trash := fmt.Sprintf("%s.%d.pygo-trash", dir, time.Now().UnixNano())
+	trash := fmt.Sprintf("%s.%d.venvctl-trash", dir, time.Now().UnixNano())
 	if err := retry(func() error { return os.Rename(dir, trash) }); err != nil {
 		return &LockedError{Dir: dir, Err: err}
 	}

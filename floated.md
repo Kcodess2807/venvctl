@@ -83,6 +83,15 @@ You asked for the name pyGo. Command is `pygo` (lowercase, easiest to type; Wind
 Migration: copied `registry.json` (your scanned venvs) to the new folder, installed `pygo.exe` in `%LOCALAPPDATA%\pygoin`, swapped the user PATH entry. Old `%LOCALAPPDATA%\winvenv` stays until the old `wv` hook lines are removed from the profile, AutoRun and `.bashrc`, because those still call `wv.exe`. No migration code in the binary: it was a one-time move for one machine.
 Side note: a `pygo scan` of the temp folder registered 12 venvs from other Claude temp sessions; they were unregistered (folders left alone).
 
+## 17. Renamed to venvctl
+Renamed to venvctl. Reason: `pygo` collides with an existing ReiterAdam/pygo venv CLI on GitHub, the PyGo Framework CLI, pygo-mcp, and pygo-tools on PyPI. `*ctl` signals a tool that manages things it didn't create, matching the uv-creates / venvctl-manages positioning.
+Entries 1-16 above keep the names that were current when they were written (`pygo`, `_PYGO_OLD_PATH`, `%LOCALAPPDATA%\pygo`, ...); today each is the `venvctl` equivalent (`venvctl-complete.md` section 11b has the full table).
+- **Compatibility, kept small on purpose.** `off`/`on` adopt and clear the `_PYGO_OLD_*` variables of shells activated before the rename. Old `.pygo-trash`/`.wv-trash` folders count as trash. There is no `pygo` alias.
+- **`venvctl init` cleans up both older hook generations itself** (WinVenv and pyGo), which replaces the manual paste-in snippet from entry 16. It filters line-by-line and segment-by-segment in pure functions, so the rules are unit-tested on strings. It keeps profile encoding and line endings, writes `.bashrc` LF without a BOM, and keeps VS Code's AutoRun segment in order. It has `--dry-run` and `--remove`.
+- **Migration on first run, not at install time.** It is triggered by a missing `venvctlegistry.json` (not a missing folder, so an already-copied `bin` does not block it). Central envs are renamed, not copied, and then repaired, because their launchers embed absolute paths. The old folder is never deleted.
+- **`VENVCTL_HOME`** overrides the state root. Legacy folders are then its siblings, which keeps tests off the real `%LOCALAPPDATA%`.
+- **Found while testing the compat code:** PowerShell's `Get-Item`/`Remove-Item` silently ignore a `function:global:` prefix, so the prompt was never restored by `off` (this was true in pyGo and WinVenv too). Prompt functions are now read and written as `${function:global:name}` and removed by unqualified path. Verified by an on/off round trip whose prompt matches before and after.
+
 ## Open items
 - No `pygo prune` (bulk delete by age or size) yet; `list` shows the data it would need.
 - `config.json` is read but never written by a command.

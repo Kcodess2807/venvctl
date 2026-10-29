@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"pygo/internal/cli"
+	"venvctl/internal/cli"
 )
 
 func main() {

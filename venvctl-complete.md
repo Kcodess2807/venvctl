@@ -1,24 +1,24 @@
-# pyGo: complete project record
+# venvctl: complete project record
 
-Everything built, decided, tested, fixed and left open while building pyGo, as of 29 Oct 2026.
+Everything built, decided, tested, fixed and left open while building venvctl, as of 29 Oct 2026.
 For a shorter view, see `design.md` (architecture) and `floated.md` (decision log).
 
 ---
 
-## 1. What pyGo is
+## 1. What venvctl is
 
-pyGo (command: `pygo`) is a single-binary, Windows-native manager for Python virtual environments, written in Go. It does not replace uv or pip. It manages the environments themselves: activating, finding, deleting, repairing and diagnosing them.
+venvctl (command: `venvctl`) is a single-binary, Windows-native manager for Python virtual environments, written in Go. It does not replace uv or pip. It manages the environments themselves: activating, finding, deleting, repairing and diagnosing them.
 
 ### The four problems it solves
 
-| # | Problem on Windows | pyGo answer |
+| # | Problem on Windows | venvctl answer |
 |---|---|---|
-| 1 | Activation syntax differs per shell (`Activate.ps1`, `activate.bat`, `source activate`), and PowerShell often refuses `Activate.ps1` with `PSSecurityException` because of ExecutionPolicy. | `pygo on` / `pygo off` work the same in PowerShell, CMD and Git Bash, and never run a `.ps1` file. |
-| 2 | A compiled program cannot change its parent shell's environment variables. This is why uv has no `uv activate`. | A small shell function, installed once by `pygo init`, evaluates the text `pygo` prints. |
-| 3 | Deleting a `.venv` fails with `Access is denied (os error 5)` because `python.exe`, `ruff.exe`, language servers and so on hold files open. | `pygo nuke` asks Windows which processes hold the files, shows them, and kills them after confirmation. |
-| 4 | Dozens of forgotten venvs eat 20 GB+, with no list, no way to jump to them, and breakage after a folder rename. | `pygo scan`, `pygo list`, `pygo cd`, `pygo repair`. |
+| 1 | Activation syntax differs per shell (`Activate.ps1`, `activate.bat`, `source activate`), and PowerShell often refuses `Activate.ps1` with `PSSecurityException` because of ExecutionPolicy. | `venvctl on` / `venvctl off` work the same in PowerShell, CMD and Git Bash, and never run a `.ps1` file. |
+| 2 | A compiled program cannot change its parent shell's environment variables. This is why uv has no `uv activate`. | A small shell function, installed once by `venvctl init`, evaluates the text `venvctl` prints. |
+| 3 | Deleting a `.venv` fails with `Access is denied (os error 5)` because `python.exe`, `ruff.exe`, language servers and so on hold files open. | `venvctl nuke` asks Windows which processes hold the files, shows them, and kills them after confirmation. |
+| 4 | Dozens of forgotten venvs eat 20 GB+, with no list, no way to jump to them, and breakage after a folder rename. | `venvctl scan`, `venvctl list`, `venvctl cd`, `venvctl repair`. |
 
-Plus `pygo doctor`, which diagnoses the usual machine-level causes: Store python stubs, ExecutionPolicy, long paths, the VC++ runtime and so on.
+Plus `venvctl doctor`, which diagnoses the usual machine-level causes: Store python stubs, ExecutionPolicy, long paths, the VC++ runtime and so on.
 
 ### Tech stack
 
@@ -56,8 +56,8 @@ Plus `pygo doctor`, which diagnoses the usual machine-level causes: Store python
 ## 3. Project layout
 
 ```
-D:\PROJECTS\pygo\
-├── cmd\pygo\main.go               13 lines   entry point, calls cli.Execute
+D:\PROJECTS\venvctl\
+├── cmd\venvctl\main.go               13 lines   entry point, calls cli.Execute
 ├── internal\
 │   ├── cli\cli.go                 494 lines  every cobra command, output styling, nuke confirm
 │   ├── discovery\discovery.go     244 lines  pyvenv.cfg scanner, PEP 514 registry reader, drives
@@ -67,11 +67,11 @@ D:\PROJECTS\pygo\
 │   ├── shell\shell.go             253 lines  hook text per shell, activate/deactivate/cd scripts, init install
 │   └── winapi\winapi.go           187 lines  Restart Manager, process table, kill, Store alias detection
 ├── go.mod / go.sum
-├── .gitignore                     ignores /pygo.exe and /dist/
-├── pygo.exe                       latest build (unstripped, about 7.1 MB)
+├── .gitignore                     ignores /venvctl.exe and /dist/
+├── venvctl.exe                       latest build (unstripped, about 7.1 MB)
 ├── design.md                      architecture summary
 ├── floated.md                     decision log (16 entries)
-└── pygo-complete.md               this file
+└── venvctl-complete.md               this file
 ```
 
 About 1,850 lines of Go in total.
@@ -79,7 +79,7 @@ About 1,850 lines of Go in total.
 ### Package dependencies (one direction, no cycles)
 
 ```
-cmd/pygo ──> cli ──┬──> doctor ──┬──> discovery
+cmd/venvctl ──> cli ──┬──> doctor ──┬──> discovery
                    │             ├──> envmgr ──> discovery
                    │             ├──> shell
                    │             └──> winapi
@@ -93,28 +93,28 @@ There's no interface or abstraction layer. Each package is a set of plain functi
 
 ---
 
-## 4. Files pyGo keeps on disk
+## 4. Files venvctl keeps on disk
 
-All under `%LOCALAPPDATA%\pygo\` (on this machine `C:\Users\Piyush\AppData\Local\pygo\`):
+All under `%LOCALAPPDATA%\venvctl\` (on this machine `C:\Users\Piyush\AppData\Local\venvctl\`):
 
 | Path | Purpose |
 |---|---|
-| `bin\pygo.exe` | The installed binary. This folder is on your user PATH. |
+| `bin\venvctl.exe` | The installed binary. This folder is on your user PATH. |
 | `registry.json` | Every known venv: `name`, `path`, `python` (base interpreter dir from `pyvenv.cfg`), `version`, `central`, `last_used`. Sorted by name. Currently 77 entries, 15.8 GB. |
-| `config.json` | Optional, hand-edited. `scan_roots` (list of folders for `pygo scan`) and `default_python` (for `pygo create`). No command writes it. |
-| `envs\<name>\` | Central environments made by `pygo create <name>`. |
-| `pygo_hook.cmd` | The CMD hook: one `doskey` line, called by AutoRun. |
-| `pygo_env.cmd` | Rewritten on every CMD `pygo` call. The doskey macro `call`s it. |
+| `config.json` | Optional, hand-edited. `scan_roots` (list of folders for `venvctl scan`) and `default_python` (for `venvctl create`). No command writes it. |
+| `envs\<name>\` | Central environments made by `venvctl create <name>`. |
+| `venvctl_hook.cmd` | The CMD hook: one `doskey` line, called by AutoRun. |
+| `venvctl_env.cmd` | Rewritten on every CMD `venvctl` call. The doskey macro `call`s it. |
 
-Shell profile entries that `pygo init` adds:
+Shell profile entries that `venvctl init` adds:
 
 | Shell | Where | Line |
 |---|---|---|
-| Windows PowerShell 5.1 / PowerShell 7 | each `$PROFILE` | `& '<path>\pygo.exe' init pwsh \| Out-String \| Invoke-Expression` |
-| CMD | `HKCU\Software\Microsoft\Command Processor\AutoRun` | `if exist "<...>\pygo_hook.cmd" call "<...>\pygo_hook.cmd"` (appended with ` & ` if AutoRun already had something) |
-| Git Bash | `%USERPROFILE%\.bashrc` | `eval "$('<posix path>/pygo.exe' init bash)"` |
+| Windows PowerShell 5.1 / PowerShell 7 | each `$PROFILE` | `& '<path>\venvctl.exe' init pwsh \| Out-String \| Invoke-Expression` |
+| CMD | `HKCU\Software\Microsoft\Command Processor\AutoRun` | `if exist "<...>\venvctl_hook.cmd" call "<...>\venvctl_hook.cmd"` (appended with ` & ` if AutoRun already had something) |
+| Git Bash | `%USERPROFILE%\.bashrc` | `eval "$('<posix path>/venvctl.exe' init bash)"` |
 
-Each entry is preceded by the comment `# pyGo shell hook` and added only once, even if you rerun init.
+Each entry is preceded by the comment `# venvctl shell hook` and added only once, even if you rerun init.
 
 ---
 
@@ -122,23 +122,23 @@ Each entry is preceded by the comment `# pyGo shell hook` and added only once, e
 
 | Command | Aliases | Flags | What it does |
 |---|---|---|---|
-| `pygo on [name\|path]` | `activate` | | Activates a venv. With no argument it uses the nearest `.venv` or `venv` walking up from the current folder. Needs the shell hook. |
-| `pygo off` | `deactivate` | | Restores PATH and prompt. Needs the hook. |
-| `pygo cd <name\|path>` | | | Changes the shell to the venv's project folder, the parent of `.venv`. Needs the hook. |
-| `pygo init [pwsh\|cmd\|bash]` | | | With no argument it installs hooks into every detected shell. With a shell name it prints that shell's hook text, which is what profiles evaluate. |
-| `pygo create [name]` | | `-p/--python 3.12`, `-l/--local` | Makes a central env at `envs\<name>`, or `.\.venv` with `--local`. Uses uv if present. Registers it. |
-| `pygo list` | `ls` | | Table of name, Python version, size, last used and path. It flags `missing` (folder gone) and `broken-base` (base interpreter gone), and prints the total size. Sizes are computed in parallel. |
-| `pygo scan [root...]` | | | Walks the roots, or `config.json` `scan_roots`, or all fixed drives. Registers every `pyvenv.cfg` it finds, unregisters entries whose folder is gone, and always includes the central `envs` folder. |
-| `pygo nuke <name\|path>...` | `rm`, `remove` | `-f/--force` | Deletes venvs safely (section 7.2). |
-| `pygo repair [path]` | | `-n/--dry-run` | Fixes a moved or renamed venv (section 7.3). |
-| `pygo doctor` | | | Runs 9 checks. Exit code 1 only on hard failures, not warnings. |
-| `pygo __shell <shell> ...` | | | Hidden. Called only by the shell wrappers. |
+| `venvctl on [name\|path]` | `activate` | | Activates a venv. With no argument it uses the nearest `.venv` or `venv` walking up from the current folder. Needs the shell hook. |
+| `venvctl off` | `deactivate` | | Restores PATH and prompt. Needs the hook. |
+| `venvctl cd <name\|path>` | | | Changes the shell to the venv's project folder, the parent of `.venv`. Needs the hook. |
+| `venvctl init [pwsh\|cmd\|bash]` | | | With no argument it installs hooks into every detected shell. With a shell name it prints that shell's hook text, which is what profiles evaluate. |
+| `venvctl create [name]` | | `-p/--python 3.12`, `-l/--local` | Makes a central env at `envs\<name>`, or `.\.venv` with `--local`. Uses uv if present. Registers it. |
+| `venvctl list` | `ls` | | Table of name, Python version, size, last used and path. It flags `missing` (folder gone) and `broken-base` (base interpreter gone), and prints the total size. Sizes are computed in parallel. |
+| `venvctl scan [root...]` | | | Walks the roots, or `config.json` `scan_roots`, or all fixed drives. Registers every `pyvenv.cfg` it finds, unregisters entries whose folder is gone, and always includes the central `envs` folder. |
+| `venvctl nuke <name\|path>...` | `rm`, `remove` | `-f/--force` | Deletes venvs safely (section 7.2). |
+| `venvctl repair [path]` | | `-n/--dry-run` | Fixes a moved or renamed venv (section 7.3). |
+| `venvctl doctor` | | | Runs 9 checks. Exit code 1 only on hard failures, not warnings. |
+| `venvctl __shell <shell> ...` | | | Hidden. Called only by the shell wrappers. |
 
 ### How a name or path is resolved (`envmgr.Resolve`)
 
 1. With no argument it walks up from the current folder, looking for `.venv` or `venv`.
 2. If the argument is a folder containing `pyvenv.cfg`, it uses that.
-3. If the argument is a name under `%LOCALAPPDATA%\pygo\envs\`, it uses that.
+3. If the argument is a name under `%LOCALAPPDATA%\venvctl\envs\`, it uses that.
 4. If the argument matches a registered name, case-insensitively, it uses that. If two venvs share the name (you have several, like `gravity-render`), it is an error asking for a path.
 
 A `.venv` that is a file, not a folder, is treated as a PEP 832 redirect (section 7.5).
@@ -153,43 +153,43 @@ Local `.venv` and `venv` folders are named after their project folder, so `D:\PR
 
 A child process can't change its parent's environment. So:
 
-1. `pygo init` puts a small function named `pygo` into each shell.
-2. When you type `pygo on`, `pygo off` or `pygo cd`, the function runs `pygo.exe __shell <shell> on ...`.
-3. `pygo.exe` resolves the venv, stamps `last_used` in the registry, and prints a script as plain text.
+1. `venvctl init` puts a small function named `venvctl` into each shell.
+2. When you type `venvctl on`, `venvctl off` or `venvctl cd`, the function runs `venvctl.exe __shell <shell> on ...`.
+3. `venvctl.exe` resolves the venv, stamps `last_used` in the registry, and prints a script as plain text.
 4. The function evaluates that text inside the current shell.
-5. Every other subcommand (`list`, `nuke`, and so on) passes straight through to `pygo.exe`.
+5. Every other subcommand (`list`, `nuke`, and so on) passes straight through to `venvctl.exe`.
 
 The set of intercepted verbs is `on, activate, off, deactivate, cd`. It's defined in `shell.Handled` and repeated in the wrapper text.
 
 ### 6.2 Why ExecutionPolicy doesn't block it
 
-ExecutionPolicy governs script files (`.ps1`). It doesn't govern strings passed to `Invoke-Expression`. pyGo never runs `Activate.ps1`. It evaluates text, so `pygo on` worked in a test shell forced to `Restricted`.
+ExecutionPolicy governs script files (`.ps1`). It doesn't govern strings passed to `Invoke-Expression`. venvctl never runs `Activate.ps1`. It evaluates text, so `venvctl on` worked in a test shell forced to `Restricted`.
 
-One caveat remains. `$PROFILE` is itself a `.ps1`, so under `Restricted` or `AllSigned` the profile, and with it the hook, does not load. `pygo doctor` reports this and names the deciding scope. On Group Policy-locked machines, where `-ExecutionPolicy Bypass` is ignored, it suggests starting shells with:
+One caveat remains. `$PROFILE` is itself a `.ps1`, so under `Restricted` or `AllSigned` the profile, and with it the hook, does not load. `venvctl doctor` reports this and names the deciding scope. On Group Policy-locked machines, where `-ExecutionPolicy Bypass` is ignored, it suggests starting shells with:
 
 ```
-powershell -NoExit -Command "pygo init pwsh | Out-String | iex"
+powershell -NoExit -Command "venvctl init pwsh | Out-String | iex"
 ```
 
 ### 6.3 What the activate script does, per shell
 
 | Step | PowerShell | CMD | Git Bash |
 |---|---|---|---|
-| Save original PATH once | `$env:_PYGO_OLD_PATH` | `_PYGO_OLD_PATH` | `_PYGO_OLD_PATH` |
+| Save original PATH once | `$env:_VENVCTL_OLD_PATH` | `_VENVCTL_OLD_PATH` | `_VENVCTL_OLD_PATH` |
 | Set venv vars | `VIRTUAL_ENV`, `VIRTUAL_ENV_PROMPT` | same | same, with a POSIX path like `/c/...` |
 | PATH | `<venv>\Scripts;` + saved PATH | same | `<venv>/Scripts:` + saved PATH |
 | Clear `PYTHONHOME` | yes | yes | yes |
-| Prompt | wraps `prompt` to prefix `(name)`, unless oh-my-posh or starship is active | `PROMPT=(name) <old>` saved in `_PYGO_OLD_PROMPT` | `PS1` prefix saved in `_PYGO_OLD_PS1`, unless oh-my-posh or starship is active |
+| Prompt | wraps `prompt` to prefix `(name)`, unless oh-my-posh or starship is active | `PROMPT=(name) <old>` saved in `_VENVCTL_OLD_PROMPT` | `PS1` prefix saved in `_VENVCTL_OLD_PS1`, unless oh-my-posh or starship is active |
 | Message | `activated <name>` | same | same |
 
-Because the original PATH is saved only once, activating a second venv replaces the first instead of stacking. `pygo off` restores PATH and prompt exactly and removes the variables.
+Because the original PATH is saved only once, activating a second venv replaces the first instead of stacking. `venvctl off` restores PATH and prompt exactly and removes the variables.
 
 PowerShell strings are escaped for single quotes (`'` becomes `''`). Bash strings are escaped as `'\''`.
 
 ### 6.4 PowerShell specifics
 
-- The wrapper switches `[Console]::OutputEncoding` to UTF-8 around the `pygo.exe` call and restores it afterwards. PowerShell 5.1 otherwise decodes native output with the OEM codepage, which garbles non-ASCII paths. I tested a venv under an Arabic-plus-accented folder name.
-- Prompt engines are detected with `POSH_THEME`/`POSH_SHELL` (oh-my-posh) and `STARSHIP_SHELL`. When one is active, pyGo leaves the prompt alone, and those engines show the venv from `VIRTUAL_ENV`/`VIRTUAL_ENV_PROMPT`. You have oh-my-posh installed.
+- The wrapper switches `[Console]::OutputEncoding` to UTF-8 around the `venvctl.exe` call and restores it afterwards. PowerShell 5.1 otherwise decodes native output with the OEM codepage, which garbles non-ASCII paths. I tested a venv under an Arabic-plus-accented folder name.
+- Prompt engines are detected with `POSH_THEME`/`POSH_SHELL` (oh-my-posh) and `STARSHIP_SHELL`. When one is active, venvctl leaves the prompt alone, and those engines show the venv from `VIRTUAL_ENV`/`VIRTUAL_ENV_PROMPT`. You have oh-my-posh installed.
 - `init` asks both `pwsh` and `powershell` for `$PROFILE`, because 7 and 5.1 use different files. On this machine only Windows PowerShell 5.1 exists.
 
 ### 6.5 CMD specifics
@@ -197,19 +197,19 @@ PowerShell strings are escaped for single quotes (`'` becomes `''`). Bash string
 CMD has no eval, so the hook is a doskey macro:
 
 ```
-doskey pygo="<path>\pygo.exe" __shell cmd $* $T call "<...>\pygo_env.cmd"
+doskey venvctl="<path>\venvctl.exe" __shell cmd $* $T call "<...>\venvctl_env.cmd"
 ```
 
-`$T` separates commands in doskey. Every `pygo` call goes through `__shell cmd`, which:
+`$T` separates commands in doskey. Every `venvctl` call goes through `__shell cmd`, which:
 
-- writes the activate, deactivate or cd script to `pygo_env.cmd` for hook verbs, or
-- writes an empty `pygo_env.cmd` and runs the normal command itself for everything else.
+- writes the activate, deactivate or cd script to `venvctl_env.cmd` for hook verbs, or
+- writes an empty `venvctl_env.cmd` and runs the normal command itself for everything else.
 
 The file is rewritten on every call, even on errors, so a stale script never runs again.
 
 Doskey macros only work at an interactive CMD prompt, not inside `.bat` files or under `cmd /c`.
 
-I deliberately did not add a recursion-guard variable (decision 15 in `floated.md`). The hook is one doskey line with no subprocess, so it can't recurse. A guard variable would be inherited by child CMD windows, which don't inherit doskey macros, so it would break `pygo` in them.
+I deliberately did not add a recursion-guard variable (decision 15 in `floated.md`). The hook is one doskey line with no subprocess, so it can't recurse. A guard variable would be inherited by child CMD windows, which don't inherit doskey macros, so it would break `venvctl` in them.
 
 ### 6.6 Git Bash specifics
 
@@ -221,7 +221,7 @@ Paths are converted from `C:\a\b` to `/c/a/b`, the same as CPython's own `activa
 
 ### 7.1 Restart Manager (who is locking my files?)
 
-`golang.org/x/sys/windows` does not wrap `rstrtmgr.dll`, so pyGo loads it with `windows.NewLazySystemDLL` and calls four functions:
+`golang.org/x/sys/windows` does not wrap `rstrtmgr.dll`, so venvctl loads it with `windows.NewLazySystemDLL` and calls four functions:
 
 1. `RmStartSession`
 2. `RmRegisterResources` with every `.exe`, `.dll` and `.pyd` under the venv. Those are the file types that block deletes in practice, so the list is hundreds of files, not tens of thousands.
@@ -230,7 +230,7 @@ Paths are converted from `C:\a\b` to `/c/a/b`, the same as CPython's own `activa
 
 It needs no admin rights for processes in your own session.
 
-For each locker, pyGo adds:
+For each locker, venvctl adds:
 
 - **Exe path** via `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `QueryFullProcessImageName`
 - **Parent process name** from a Toolhelp snapshot (`CreateToolhelp32Snapshot` + `Process32First/Next`), shown as "SPAWNED BY" (for example `Code.exe` or `powershell.exe`)
@@ -251,7 +251,7 @@ Restart Manager -> lockers
   else (scripts, pipes)        -> error, nothing deleted
 kill = OpenProcess(PROCESS_TERMINATE) + TerminateProcess
 delete:
-  rename <dir> -> <dir>.<nanoseconds>.pygo-trash   (retries 0/50/100/200/400/800 ms)
+  rename <dir> -> <dir>.<nanoseconds>.venvctl-trash   (retries 0/50/100/200/400/800 ms)
      rename failed -> "still locked, nothing deleted", venv untouched
   clear read-only bits under the trash folder
   RemoveAll(trash)                                  (same backoff)
@@ -276,7 +276,7 @@ Algorithm:
    - uv: `@for %%i in ("C:\old\path") do @set "VIRTUAL_ENV=%%~fi"`
 2. If old equals current, do nothing ("already points at ...").
 3. For every file in `Scripts\`:
-   - **uv launcher** (file ends in `UVSC`, `UVPY` or the old `UVUV`). The layout is `[launcher exe][zip][python path utf-8][u32 little-endian length][magic]`. pyGo replaces the path inside that trailer and rewrites the length field.
+   - **uv launcher** (file ends in `UVSC`, `UVPY` or the old `UVUV`). The layout is `[launcher exe][zip][python path utf-8][u32 little-endian length][magic]`. venvctl replaces the path inside that trailer and rewrites the length field.
    - **Everything else** (pip/distlib launchers, `activate`, `activate.bat`, `activate.fish`, and so on) gets a plain byte replace of the old path, in both `C:\` and `C:/` forms. For pip launchers the path sits in a `#!` shebang before a zip. Shifting the zip is harmless because zipimport finds it from the end-of-file record.
 4. Update the registry: remove the old path and add the new one.
 
@@ -286,18 +286,18 @@ Algorithm:
 
 ### 7.4 Store app execution alias detection
 
-`%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe` is a 0-byte reparse point that opens the Microsoft Store. pyGo detects it with `FindFirstFile`. That reports `FILE_ATTRIBUTE_REPARSE_POINT` with reparse tag `IO_REPARSE_TAG_APPEXECLINK` (`0x8000001B`) in `Reserved0`.
+`%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe` is a 0-byte reparse point that opens the Microsoft Store. venvctl detects it with `FindFirstFile`. That reports `FILE_ATTRIBUTE_REPARSE_POINT` with reparse tag `IO_REPARSE_TAG_APPEXECLINK` (`0x8000001B`) in `Reserved0`.
 
 ### 7.5 PEP 832 redirect files (read-only support)
 
-PEP 832 (draft, targeting Python 3.15) lets a project's `.venv` be a one-line text file pointing at the real venv. pyGo follows such files:
+PEP 832 (draft, targeting Python 3.15) lets a project's `.venv` be a one-line text file pointing at the real venv. venvctl follows such files:
 
 - one UTF-8 line, with a BOM tolerated
 - a relative path is resolved against the file's folder
 - the file must be under 32 KB and is treated as path data only, never executed
 - the venv is named after the project folder
 
-pyGo does not write redirect files yet. The PEP is a draft, and tools that expect `.venv` to be a folder could break on a file.
+venvctl does not write redirect files yet. The PEP is a draft, and tools that expect `.venv` to be a folder could break on a file.
 
 ### 7.6 PEP 514 interpreter discovery
 
@@ -307,7 +307,7 @@ Installed Pythons are read from three registry roots:
 - `HKLM\Software\Python`
 - `HKLM\Software\WOW6432Node\Python` (32-bit)
 
-For each `<Company>\<Tag>`, pyGo reads `InstallPath\ExecutablePath` (or `InstallPath` default + `python.exe`), `Version` or `SysVersion`, and `SysArchitecture`. It skips installs whose exe no longer exists and removes duplicates by exe path. Results are sorted newest first, with 64-bit before 32-bit.
+For each `<Company>\<Tag>`, venvctl reads `InstallPath\ExecutablePath` (or `InstallPath` default + `python.exe`), `Version` or `SysVersion`, and `SysArchitecture`. It skips installs whose exe no longer exists and removes duplicates by exe path. Results are sorted newest first, with 64-bit before 32-bit.
 
 `FindInterpreter("3.12")` returns the newest match. With no version requested it falls back to `python` on PATH. This is only used when uv isn't installed.
 
@@ -332,7 +332,7 @@ For each `<Company>\<Tag>`, pyGo reads `InstallPath\ExecutablePath` (or `Install
 | LongPathsEnabled | `1` | disabled | | admin `reg add ... LongPathsEnabled /d 1` |
 | VC++ 2015-2022 runtime | `System32\vcruntime140.dll` exists | | missing | install `vc_redist.x64.exe` |
 | uv | on PATH | missing | | uv install one-liner |
-| shell hooks | all detected shells hooked | some or none missing | | `pygo init` |
+| shell hooks | all detected shells hooked | some or none missing | | `venvctl init` |
 | venvs in cloud-synced folders | none | registered venvs under OneDrive, Dropbox, Google Drive or iCloudDrive | | move out, nuke the synced copy |
 
 ### Your machine right now
@@ -365,7 +365,7 @@ For each `<Company>\<Tag>`, pyGo reads `InstallPath\ExecutablePath` (or `Install
 
 | Change | Why |
 |---|---|
-| **uv launcher repair (real bug, reproduced).** Current uv ends console-script launchers with `UVSC`, but pyGo only knew `UVUV`/`UVPY`. Repair fell back to a plain replace, the length field went stale, and the command died with "Failed to canonicalize script path". | The fix handles all three magics. The test now uses `UVSC`. A real `pyflakes.exe` runs after a move and repair. |
+| **uv launcher repair (real bug, reproduced).** Current uv ends console-script launchers with `UVSC`, but venvctl only knew `UVUV`/`UVPY`. Repair fell back to a plain replace, the length field went stale, and the command died with "Failed to canonicalize script path". | The fix handles all three magics. The test now uses `UVSC`. A real `pyflakes.exe` runs after a move and repair. |
 | `repair --dry-run` | preview before rewriting `.exe` files |
 | nuke: parent process, `[y/N]` prompt, never kill editors or shells | a wrong kill loses unsaved work in an editor |
 | Restart Manager retry on `ERROR_MORE_DATA` | lock list can grow between calls |
@@ -411,6 +411,8 @@ Net: about -54 lines, and -1 dependency if lipgloss goes.
 
 ## 11. The rename from WinVenv/wv to pyGo/pygo
 
+> **Superseded.** This records the WinVenv-to-pyGo rename as it happened. Do not run the paste-in snippet below: `venvctl init` now removes WinVenv and pyGo hooks itself (section 11b).
+
 | Thing | Before | After |
 |---|---|---|
 | Product name | WinVenv | pyGo |
@@ -450,14 +452,82 @@ The `.bashrc` rewrite keeps Unix line endings and writes no BOM, so Git Bash won
 
 ---
 
+## 11b. Rename from pyGo to venvctl
+
+**Why.** `pygo` collides with an existing ReiterAdam/pygo venv CLI on GitHub, the PyGo Framework CLI, pygo-mcp, and pygo-tools on PyPI. `*ctl` signals a tool that manages things it didn't create: uv creates, venvctl manages.
+
+| Thing | pyGo | venvctl |
+|---|---|---|
+| Product name | pyGo | venvctl |
+| Command / binary | `pygo` / `pygo.exe` | `venvctl` / `venvctl.exe` |
+| Go module | `pygo` | `venvctl` |
+| Entry folder | `cmd/pygo` | `cmd/venvctl` |
+| State folder | `%LOCALAPPDATA%\pygo` | `%LOCALAPPDATA%\venvctl` (or `VENVCTL_HOME`) |
+| Hook files | `pygo_hook.cmd`, `pygo_env.cmd` | `venvctl_hook.cmd`, `venvctl_env.cmd` |
+| Env vars | `_PYGO_OLD_PATH`, `_PYGO_OLD_PROMPT`, `_PYGO_OLD_PS1` | `_VENVCTL_OLD_PATH`, `_VENVCTL_OLD_PROMPT`, `_VENVCTL_OLD_PS1` |
+| Trash suffix | `.pygo-trash` | `.venvctl-trash` |
+| Profile comment | `# pyGo shell hook` | `# venvctl shell hook` |
+| Shell function / doskey macro | `pygo` | `venvctl` |
+
+There is no `pygo` alias or shim. The old name stops existing.
+
+### Backward compatibility (deliberately small)
+
+- **Shells activated before the rename.** `venvctl off` (and `on`) adopt `_PYGO_OLD_PATH`, `_PYGO_OLD_PROMPT`, `_PYGO_OLD_PS1` and PowerShell's `_pygo_old_prompt` when the venvctl ones are unset, then clear the old ones. Such a shell therefore deactivates to its original PATH and prompt. Tested in a throwaway PowerShell.
+- **Old trash folders.** `*.pygo-trash` and `*.wv-trash` count as trash, like `*.venvctl-trash`. Scan skips them, and nuke and prune sweep any left next to a venv they delete.
+
+### Legacy hook cleanup in `venvctl init`
+
+For each shell it installs into, `venvctl init` removes every WinVenv and pyGo hook before adding its own:
+
+- **Profile lines.** This covers each PowerShell `$PROFILE` and `~/.bashrc`. It removes a line containing `# WinVenv shell hook` or `# pyGo shell hook` along with the line after it, plus any line invoking `wv.exe`, `pygo.exe`, `winvenv\bin` or `pygo\bin`. A venvctl hook line calling a different exe is removed as stale. Every other line is kept byte-for-byte. PowerShell profiles keep their encoding (UTF-8, UTF-8 with BOM, UTF-16) and line endings. `.bashrc` is written with LF and no BOM.
+- **CMD AutoRun.** The value is split on ` & `. Segments referencing `wv_hook.cmd`, `pygo_hook.cmd`, `winvenv\` or `pygo\` are dropped. Every other segment, such as VS Code's `vscode-python.bat`, keeps its order. The venvctl segment is kept in place or appended. The value type, REG_SZ or REG_EXPAND_SZ, is preserved.
+- **Report.** Each shell gets one line, for example `PowerShell 5.1: removed 1 legacy line (WinVenv), added venvctl hook`.
+- **Flags.** `venvctl init --dry-run` prints the report and writes nothing. `venvctl init --remove` removes venvctl and legacy hooks and adds nothing; it is the uninstall step.
+
+On this machine `venvctl init --dry-run` reports one WinVenv line to remove in each of PowerShell 5.1, CMD and Git Bash. Your current hooks still date from WinVenv, because the pyGo hook migration snippet was never run.
+
+### Doctor
+
+- The hook check only counts lines invoking a `venvctl.exe`, and it must be the running one.
+- A "legacy hook found (WinVenv/pyGo)" warning appears for each shell that still has old lines.
+- An "old state folders" warning appears while `%LOCALAPPDATA%\pygo` or `%LOCALAPPDATA%\winvenv` exists.
+
+### First-run state migration
+
+venvctl migrates on any command when all three of these hold:
+- `%LOCALAPPDATA%\venvctl\registry.json` does not exist
+- no `migrated_from` marker is set
+- `%LOCALAPPDATA%\pygo\registry.json` exists
+
+It then:
+
+1. copies `registry.json` and `config.json` into `%LOCALAPPDATA%\venvctl`
+2. renames each folder in `pygo\envs\` to `venvctl\envs\<name>`, which is atomic on one volume, then runs repair on it, because central envs embed their absolute path in launchers and `activate.bat`
+3. leaves a locked env in place, with its registry entry still pointing at the old path, and reports it; a failed repair is reported with the `venvctl repair <path>` fix
+4. points registry entries for moved envs at their new location
+5. prints a one-time summary on stderr
+6. writes `migrated_from: "pygo"` and `migrated_at` into `config.json`, keeping every other key
+
+It never deletes anything in the old folder. The check uses `registry.json`, not the folder itself, so installing `venvctl\bin` first does not block it.
+
+`VENVCTL_HOME` overrides the state folder. The legacy folders are then looked for as its siblings. That's how the migration test runs against a temp folder, using a real uv venv that it moves, repairs and runs.
+
+### Local install done for you
+
+- `venvctl.exe` built (unstripped) and copied to `%LOCALAPPDATA%\venvctl\bin\`.
+- In your user PATH, `C:\Users\Piyush\AppData\Local\pygo\bin` was replaced by `C:\Users\Piyush\AppData\Local\venvctl\bin`. There was no `winvenv\bin` entry. The system PATH was not touched. .NET's `SetEnvironmentVariable` broadcasts `WM_SETTINGCHANGE`.
+- `%LOCALAPPDATA%\pygo\bin\pygo.exe` was left in place.
+- **Not done: the real first-run migration.** Claude Code's safety check blocked running `venvctl` against your real `%LOCALAPPDATA%`, so the migration happens the first time you run `venvctl` yourself.
+
 ## 12. Known issues
 
-- **Doctor's hook check gives false positives.** It looks for the text `init pwsh` / `init bash` in your profiles, which the old `wv` lines also contain. Right now it says PowerShell and Bash are hooked even though they point at `wv.exe`. The fix is to also require `pygo` in the matched line. Until then, trust it only after the migration above.
+- **Doctor's hook check gives false positives.** It looks for the text `init pwsh` / `init bash` in your profiles, which the old `wv` lines also contain. Right now it says PowerShell and Bash are hooked even though they point at `wv.exe`. The fix is to also require `venvctl` in the matched line. Until then, trust it only after the migration above.
 - **Repair's byte replace can over-match.** If the old path is `C:\x\proj` and a file also mentions `C:\x\proj2`, the second gets rewritten too. This is rare inside `Scripts\`.
 - **Orphaned child processes.** Killing a venv `python.exe` launcher can leave its base-interpreter child running. Restart Manager lists that child too, but only if it maps files from the venv.
 - **`scan` walks the central folder twice** if you also pass it as a root. Harmless.
 - **Scanning a temp folder registers other tools' throwaway venvs.** Point `scan` at real project roots, or set `scan_roots` in `config.json`.
-- **Duplicate names.** Several of your venvs share a name (`gravity-render` three times, `agent-gateway`, `Cli`, `gateway`, `overreach`, and others). `pygo on <name>` errors for those, and you need to pass the path.
+- **Duplicate names.** Several of your venvs share a name (`gravity-render` three times, `agent-gateway`, `Cli`, `gateway`, `overreach`, and others). `venvctl on <name>` errors for those, and you need to pass the path.
 - **Odd registry entries.** `P.A.R.A.K.H` has `home = /usr/bin`, so it was created from WSL and will show `broken-base`. `virt` points at a Store-installed Python 3.12.
 
 ---
@@ -476,17 +546,17 @@ The `.bashrc` rewrite keeps Unix line endings and writes no BOM, so Git Bash won
 | Non-ASCII | venv under `تجربة_é`, activated in PS 5.1 | `VIRTUAL_ENV` matches, python resolves |
 | CMD activation | the exact macro expansion run in a `.cmd`: on, `where python`, off, pass-through `ls` | works |
 | Installed hooks | fresh PowerShell loading your real profile (under the old `wv` name) | works |
-| Redirect file | `proj\.venv` containing `..\uvv_moved` | `pygo on` resolves the target |
+| Redirect file | `proj\.venv` containing `..\uvv_moved` | `venvctl on` resolves the target |
 | doctor | on your machine | output in section 8 |
 
 ### Not tested
 
-- `pygo init` run by me. It was blocked, and you ran it under the old name.
+- `venvctl init` run by me. It was blocked, and you ran it under the old name.
 - Git Bash activation in a real Git Bash window. The script is generated but has never been executed.
 - A real interactive CMD window with the doskey macro.
 - The `[y/N]` prompt. My shell has no console attached.
 - The editor-protection refusal, since I never had VS Code actually locking a venv.
-- Anything under the new `pygo` hooks, which wait on the migration in section 11.
+- Anything under the new `venvctl` hooks, which wait on the migration in section 11.
 
 ---
 
@@ -509,7 +579,7 @@ The full reasoning is in `floated.md`. Short version:
 13. Go is installed user-local.
 14. Fixes from the first smoke test (section 9.1).
 15. Changes from the research brief (section 9.2), plus what was deliberately not built.
-16. The rename to pyGo.
+16. The rename to venvctl.
 
 ---
 
@@ -517,8 +587,8 @@ The full reasoning is in `floated.md`. Short version:
 
 | Item | Why not yet |
 |---|---|
-| Auto-activate on `cd`, with a `pygo allow` trust step | Biggest feature left. It needs a prompt hook that only spawns `pygo.exe` when the project root changes. The obvious next build. |
-| `pygo prune` (bulk delete by age or size) | `list` already shows the data it would use |
+| Auto-activate on `cd`, with a `venvctl allow` trust step | Biggest feature left. It needs a prompt hook that only spawns `venvctl.exe` when the project root changes. The obvious next build. |
+| `venvctl prune` (bulk delete by age or size) | `list` already shows the data it would use |
 | Writing PEP 832 redirect files / `--junction` | PEP still a draft; junctions break OneDrive sync |
 | Windows Terminal fragment, cached init text | only matter on Group Policy-locked or antivirus-slowed machines |
 | Code signing, version resources, winget/scoop, arm64 build | do before sharing the binary with anyone |
@@ -530,34 +600,34 @@ The full reasoning is in `floated.md`. Short version:
 ## 16. Everyday cheat sheet
 
 ```powershell
-pygo scan                     # find and register venvs (all fixed drives, or config scan_roots)
-pygo scan D:\PROJECTS         # just one tree
-pygo list                     # everything, with sizes and last-used
-pygo create api -p 3.12       # central env
-pygo create --local           # .\.venv in this folder
-pygo on                       # nearest .venv upward
-pygo on api                   # by name
-pygo on D:\PROJECTS\x\.venv   # by path (use for duplicate names)
-pygo off
-pygo cd api                   # jump to project folder
-pygo nuke old-thing           # asks before killing lockers
-pygo nuke old-thing --force   # kills without asking (never editors/shells)
-pygo repair --dry-run         # after a folder move: preview
-pygo repair                   # then apply
-pygo doctor                   # machine diagnosis
+venvctl scan                     # find and register venvs (all fixed drives, or config scan_roots)
+venvctl scan D:\PROJECTS         # just one tree
+venvctl list                     # everything, with sizes and last-used
+venvctl create api -p 3.12       # central env
+venvctl create --local           # .\.venv in this folder
+venvctl on                       # nearest .venv upward
+venvctl on api                   # by name
+venvctl on D:\PROJECTS\x\.venv   # by path (use for duplicate names)
+venvctl off
+venvctl cd api                   # jump to project folder
+venvctl nuke old-thing           # asks before killing lockers
+venvctl nuke old-thing --force   # kills without asking (never editors/shells)
+venvctl repair --dry-run         # after a folder move: preview
+venvctl repair                   # then apply
+venvctl doctor                   # machine diagnosis
 ```
 
 ### Building from source
 
 ```powershell
-cd D:\PROJECTS\pygo
+cd D:\PROJECTS\venvctl
 go vet ./...
 go test ./...
-go build -o pygo.exe ./cmd/pygo
-Copy-Item pygo.exe "$env:LOCALAPPDATA\pygo\bin\pygo.exe" -Force
+go build -o venvctl.exe ./cmd/venvctl
+Copy-Item venvctl.exe "$env:LOCALAPPDATA\venvctl\bin\venvctl.exe" -Force
 ```
 
-Don't strip the build with `-ldflags "-s -w"`, because of the Defender false-positive risk. Don't move `pygo.exe` after `pygo init` either, because the hooks record its path. If you do move it, run `pygo init` again.
+Don't strip the build with `-ldflags "-s -w"`, because of the Defender false-positive risk. Don't move `venvctl.exe` after `venvctl init` either, because the hooks record its path. If you do move it, run `venvctl init` again.
 
 ### Optional machine fix
 

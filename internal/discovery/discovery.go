@@ -42,6 +42,21 @@ func ParsePyvenvCfg(dir string) (home, version string, ok bool) {
 	return home, version, true
 }
 
+// TrashSuffixes end folders that a delete renamed away. The pyGo and WinVenv generations used
+// their own names; all three are trash.
+var TrashSuffixes = []string{".venvctl-trash", ".pygo-trash", ".wv-trash"}
+
+// IsTrash reports whether a folder name ends in one of TrashSuffixes.
+func IsTrash(name string) bool {
+	n := strings.ToLower(name)
+	for _, s := range TrashSuffixes {
+		if strings.HasSuffix(n, s) {
+			return true
+		}
+	}
+	return false
+}
+
 var skipDirs = map[string]bool{
 	"windows": true, "program files": true, "program files (x86)": true, "programdata": true,
 	"$recycle.bin": true, "system volume information": true, "appdata": true,
@@ -84,7 +99,7 @@ func Scan(roots []string, p *Progress) []string {
 			}
 		}
 		for _, e := range ents {
-			if !e.IsDir() || e.Type()&os.ModeSymlink != 0 || skipDirs[strings.ToLower(e.Name())] {
+			if !e.IsDir() || e.Type()&os.ModeSymlink != 0 || skipDirs[strings.ToLower(e.Name())] || IsTrash(e.Name()) {
 				continue
 			}
 			wg.Add(1)

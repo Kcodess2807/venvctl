@@ -1,4 +1,4 @@
-# pyGo (`pygo`) design
+# venvctl (`venvctl`) design
 
 Windows-native Python venv manager. Go 1.22+, cobra, lipgloss, `x/sys/windows`.
 
@@ -6,17 +6,17 @@ Windows-native Python venv manager. Go 1.22+, cobra, lipgloss, `x/sys/windows`.
 
 | Pain | Command | Mechanism |
 |---|---|---|
-| Activation differs per shell, ExecutionPolicy blocks `Activate.ps1` | `pygo on` / `off` / `cd` | Shell wrapper evals a script `pygo` prints. No `.ps1` file is run, so policy does not apply. |
+| Activation differs per shell, ExecutionPolicy blocks `Activate.ps1` | `venvctl on` / `off` / `cd` | Shell wrapper evals a script `venvctl` prints. No `.ps1` file is run, so policy does not apply. |
 | A binary cannot change its parent's env | same | Wrapper function in the parent shell does the `eval`. |
-| `Access is denied` on delete | `pygo nuke` | Restart Manager lists lockers, `--force` kills, then retry delete. |
-| Forgotten venvs eating disk | `pygo scan`, `pygo list` | Concurrent walk for `pyvenv.cfg`, registry file, sizes. |
-| Renamed folder breaks venv | `pygo repair` | Rewrite old absolute path inside `Scripts\`. |
-| Misconfigured machine | `pygo doctor` | Checks listed below. |
+| `Access is denied` on delete | `venvctl nuke` | Restart Manager lists lockers, `--force` kills, then retry delete. |
+| Forgotten venvs eating disk | `venvctl scan`, `venvctl list` | Concurrent walk for `pyvenv.cfg`, registry file, sizes. |
+| Renamed folder breaks venv | `venvctl repair` | Rewrite old absolute path inside `Scripts\`. |
+| Misconfigured machine | `venvctl doctor` | Checks listed below. |
 
 ## Layout
 
 ```
-cmd/pygo/main.go        entry, calls cli.Execute
+cmd/venvctl/main.go        entry, calls cli.Execute
 internal/cli          cobra commands, output styling
 internal/discovery    pyvenv.cfg scan, PEP 514 registry finder
 internal/envmgr       registry.json, config.json, create, delete, repair
@@ -29,27 +29,27 @@ Dependencies point one way: `cli` -> `{doctor, envmgr, shell, winapi, discovery}
 
 ## State
 
-`%LOCALAPPDATA%\pygo\`
+`%LOCALAPPDATA%\venvctl\`
 - `registry.json`: every known env (name, path, base python dir, version, central flag, last used).
 - `config.json`: `scan_roots`, `default_python`. Optional, read-only for now.
 - `envs\<name>`: central environments.
-- `pygo_hook.cmd`, `pygo_env.cmd`: CMD hook and its per-call output file.
+- `venvctl_hook.cmd`, `venvctl_env.cmd`: CMD hook and its per-call output file.
 
 ## Activation flow
 
 ```
-user types: pygo on foo
-  shell function pygo  (installed by `pygo init`)
-    -> pygo.exe __shell <pwsh|bash|cmd> on foo      (hidden command)
+user types: venvctl on foo
+  shell function venvctl  (installed by `venvctl init`)
+    -> venvctl.exe __shell <pwsh|bash|cmd> on foo      (hidden command)
          resolve foo -> path, stamp last_used, print script
     <- script text
     -> Invoke-Expression / eval
          sets VIRTUAL_ENV, prepends Scripts to PATH, wraps prompt
 ```
 
-`_PYGO_OLD_PATH` stores the pre-activation PATH so `off` restores it and re-activating does not stack PATH entries.
+`_VENVCTL_OLD_PATH` stores the pre-activation PATH so `off` restores it and re-activating does not stack PATH entries.
 
-CMD cannot eval output, so the doskey macro runs `pygo __shell cmd ...` which writes `pygo_env.cmd`, then `call`s it. For non-hook commands in CMD, `__shell cmd` runs the normal command itself.
+CMD cannot eval output, so the doskey macro runs `venvctl __shell cmd ...` which writes `venvctl_env.cmd`, then `call`s it. For non-hook commands in CMD, `__shell cmd` runs the normal command itself.
 
 ## Resolution order (`envmgr.Resolve`)
 
@@ -66,7 +66,7 @@ A `.venv` that is a file is a PEP 832 redirect: its one line is the venv path, r
 resolve -> Restart Manager on Scripts/*.exe, *.dll, *.pyd -> table: PID, name, parent, exe
   editor/shell in list -> refuse, user closes it
   else --force or [y/N] -> TerminateProcess each
--> rename dir to *.pygo-trash (fails = still locked, nothing touched)
+-> rename dir to *.venvctl-trash (fails = still locked, nothing touched)
 -> RemoveAll trash with backoff -> unregister
 ```
 
