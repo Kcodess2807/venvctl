@@ -77,7 +77,7 @@ func MigrateFromPygo() (*Migration, error) {
 			continue
 		}
 		m.Moved = append(m.Moved, dst)
-		if _, _, err := Repair(dst, true); err != nil {
+		if _, err := Repair(dst, RepairOptions{Apply: true}); err != nil {
 			m.RepairFailed = append(m.RepairFailed, fmt.Sprintf("%s: %v", dst, err))
 		}
 		for i := range reg.Envs {

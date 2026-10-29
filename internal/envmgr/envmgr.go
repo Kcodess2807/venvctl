@@ -2,8 +2,6 @@
 package envmgr
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -394,103 +391,4 @@ type LeftoverError struct {
 
 func (e *LeftoverError) Error() string {
 	return fmt.Sprintf("venv removed from %s, but leftovers remain in %s: %v", e.Dir, e.Trash, e.Err)
-}
-
-// python -m venv: set "VIRTUAL_ENV=C:\x"     uv: for %%i in ("C:\x") do @set "VIRTUAL_ENV=%%~fi"
-var reVenvDir = regexp.MustCompile(`(?mi)^[@\s]*(?:set\s+"?VIRTUAL_ENV=([^"%\r\n]+)|for\s+%%i\s+in\s+\("([^"]+)"\))`)
-
-// Repair rewrites the venv's previous absolute path (embedded in activate scripts and
-// Scripts\*.exe launchers after a move/rename) to its current location.
-// With apply=false nothing is written; the returned files are what would change.
-func Repair(dir string, apply bool) (old string, files []string, err error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", nil, err
-	}
-	scripts := filepath.Join(abs, "Scripts")
-	bat, err := os.ReadFile(filepath.Join(scripts, "activate.bat"))
-	if err != nil {
-		return "", nil, errors.New("cannot determine previous location: Scripts\\activate.bat missing")
-	}
-	m := reVenvDir.FindSubmatch(bat)
-	if m == nil {
-		return "", nil, errors.New("cannot determine previous location from activate.bat")
-	}
-	old = strings.TrimSpace(string(m[1]) + string(m[2]))
-	if SamePath(old, abs) {
-		return old, nil, nil
-	}
-	ents, _ := os.ReadDir(scripts)
-	for _, e := range ents {
-		if e.IsDir() {
-			continue
-		}
-		p := filepath.Join(scripts, e.Name())
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		nb := RewritePath(b, old, abs)
-		if bytes.Equal(nb, b) {
-			continue
-		}
-		if apply {
-			if err := os.WriteFile(p, nb, 0o644); err != nil {
-				return old, files, fmt.Errorf("%s: %w", p, err)
-			}
-		}
-		files = append(files, p)
-	}
-	return old, files, nil
-}
-
-// RewritePath replaces old with new (backslash and forward-slash forms) inside a script or launcher.
-// uv trampolines end with <python path utf8><u32 LE len><magic>; their length field is fixed up.
-// Magic is "UVSC" (script entry point) or "UVPY" (python); "UVUV" in old uv releases.
-func RewritePath(b []byte, old, new string) []byte {
-	n := len(b)
-	if n > 8 && isUvMagic(b[n-4:]) {
-		l := int(binary.LittleEndian.Uint32(b[n-8 : n-4]))
-		if start := n - 8 - l; start >= 0 {
-			path := replaceBounded(b[start:n-8], []byte(old), []byte(new))
-			out := append([]byte{}, b[:start]...)
-			out = append(out, path...)
-			out = binary.LittleEndian.AppendUint32(out, uint32(len(path)))
-			return append(out, b[n-4:]...)
-		}
-	}
-	nb := replaceBounded(b, []byte(old), []byte(new))
-	return replaceBounded(nb, []byte(filepath.ToSlash(old)), []byte(filepath.ToSlash(new)))
-}
-
-// pathBoundary are the bytes that may follow a path for it to count as a whole-path match.
-const pathBoundary = `\/"');` + " \t\r\n"
-
-// replaceBounded replaces old with new only where old ends at a path boundary: followed by
-// a pathBoundary byte or the end of data. So C:\x\proj never rewrites C:\x\proj2.
-func replaceBounded(b, old, new []byte) []byte {
-	if len(old) == 0 || !bytes.Contains(b, old) {
-		return b
-	}
-	var out []byte
-	i := 0
-	for {
-		j := bytes.Index(b[i:], old)
-		if j < 0 {
-			break
-		}
-		end := i + j + len(old)
-		if end == len(b) || strings.IndexByte(pathBoundary, b[end]) >= 0 {
-			out = append(append(out, b[i:i+j]...), new...)
-		} else {
-			out = append(out, b[i:end]...)
-		}
-		i = end
-	}
-	return append(out, b[i:]...)
-}
-
-func isUvMagic(m []byte) bool {
-	s := string(m)
-	return s == "UVSC" || s == "UVPY" || s == "UVUV"
 }

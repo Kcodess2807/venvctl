@@ -1113,17 +1113,26 @@ type pruneJSON struct {
 // ---- repair ----
 
 func repairCmd() *cobra.Command {
-	var dry bool
+	var dry, relative bool
 	c := &cobra.Command{
 		Use:     "repair [name|path]",
 		GroupID: "maintain",
-		Short:   "Fix a moved or renamed venv by rewriting its old path in Scripts\\",
-		Long: "Reads the venv's previous location from Scripts\\activate.bat and rewrites it, at path\n" +
-			"boundaries only, in every file in Scripts\\, including pip and uv launcher .exe files.\n" +
-			"Rewriting .exe files can alert antivirus; use --dry-run to preview.",
+		Short:   `Fix a moved or renamed venv (pip/venv and older uv venvs) by rewriting its old path in Scripts\`,
+		Long: `Reads the venv's previous location from Scripts\activate.bat, then fixes each file in
+Scripts\ by its format:
+  activate scripts       old path rewritten at path boundaries
+  uv >= 0.9.9 launchers  UV_PYTHON_PATH resource set to the relative python.exe (relocatable)
+  older uv launchers     path in the trailer rewritten, length fixed up
+  pip/distlib launchers  #! shebang rewritten (--relative: #!"<launcher_dir>\python.exe")
+Any other .exe is never modified; if it mentions the old path it is listed as skipped.
+
+Relocatable venvs (uv venv --relocatable, the default for venvctl create) need no repair;
+only launchers pip installed into them with a now-missing absolute path are made relative.
+Rewriting a signed uv launcher invalidates its Authenticode signature. Use --dry-run to preview.
+--relative needs distlib 0.3.0 (2019) or newer launchers, which every current pip has.`,
 		Example: `  venvctl repair
   venvctl repair --dry-run D:\PROJECTS\renamed\.venv
-  venvctl repair api`,
+  venvctl repair api --relative`,
 		Args: nargs(cobra.MaximumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
 			target := ""
@@ -1135,49 +1144,75 @@ func repairCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			old, files, err := envmgr.Repair(e.Path, !dry)
+			r, err := envmgr.Repair(e.Path, envmgr.RepairOptions{Apply: !dry, Relative: relative})
 			if err != nil {
-				return Fail(exitFail, err.Error(), "repair needs the Scripts\\activate.bat that venv or uv writes; if it is gone, recreate the venv")
+				return Fail(exitFail, err.Error(), `repair needs the Scripts\activate.bat that venv or uv writes; if it is gone, recreate the venv`)
 			}
-			if files == nil {
-				files = []string{}
-			}
-			if !dry && len(files) > 0 {
-				if old != "" && !envmgr.SamePath(old, e.Path) {
-					reg.Remove(old)
+			if !dry && len(r.Fixed) > 0 {
+				if r.Old != "" && !envmgr.SamePath(r.Old, e.Path) {
+					reg.Remove(r.Old)
 				}
 				reg.Upsert(e)
 				if err := reg.Save(); err != nil {
 					return Fail(exitFail, "repaired, but the registry could not be saved: "+err.Error(), "run `venvctl scan` to resync it")
 				}
 			}
+			signed := 0
+			for _, f := range r.Fixed {
+				if f.Signed {
+					signed++
+				}
+			}
 			if opt.json {
+				fixed, skipped := r.Fixed, r.Skipped
+				if fixed == nil {
+					fixed = []envmgr.FileFix{}
+				}
+				if skipped == nil {
+					skipped = []envmgr.Skip{}
+				}
 				if err := emit(struct {
-					Name    string   `json:"name"`
-					Path    string   `json:"path"`
-					OldPath string   `json:"old_path"`
-					Files   []string `json:"files"`
-					DryRun  bool     `json:"dry_run"`
-					Changed bool     `json:"changed"`
-				}{e.Name, e.Path, old, files, dry, !dry && len(files) > 0}); err != nil {
+					Name        string           `json:"name"`
+					Path        string           `json:"path"`
+					OldPath     string           `json:"old_path"`
+					Relocatable bool             `json:"relocatable"`
+					Fixed       []envmgr.FileFix `json:"fixed"`
+					Skipped     []envmgr.Skip    `json:"skipped"`
+					DryRun      bool             `json:"dry_run"`
+					Changed     bool             `json:"changed"`
+				}{e.Name, e.Path, r.Old, r.Relocatable, fixed, skipped, dry, !dry && len(r.Fixed) > 0}); err != nil {
 					return err
 				}
 			}
+			for _, s := range r.Skipped {
+				note("%s skipped %s (%s): %s", warnMark(), filepath.Base(s.Path), s.Kind, s.Reason)
+			}
 			switch {
-			case len(files) == 0:
+			case len(r.Fixed) == 0 && r.Relocatable:
+				return nothing(e.Name + " is relocatable; nothing to repair")
+			case len(r.Fixed) == 0:
 				return nothing(e.Name + " already points at " + e.Path)
-			case dry:
-				say("would rewrite %s → %s in:", old, e.Path)
-				for _, f := range files {
-					say("  %s", f)
-				}
-			default:
-				say("%s %s  %s → %s, %d files rewritten", okMark(), e.Name, dim(old), e.Path, len(files))
+			}
+			verb := "rewrote"
+			if dry {
+				verb = "would rewrite"
+			}
+			from := r.Old
+			if r.Relocatable {
+				from = "(relocatable venv, stale launchers only)"
+			}
+			say("%s %s → %s: %s %d file(s)", map[bool]string{true: dim("~"), false: okMark()}[dry], dim(from), e.Path, verb, len(r.Fixed))
+			for _, f := range r.Fixed {
+				say("  %-12s %s  %s", f.Kind, filepath.Base(f.Path), dim(f.From+" → "+f.To))
+			}
+			if signed > 0 {
+				note("%s %d rewritten uv launcher(s) were Authenticode-signed; the signature no longer matches. Reinstall the package if your policy requires signed binaries.", warnMark(), signed)
 			}
 			return nil
 		},
 	}
-	c.Flags().BoolVarP(&dry, "dry-run", "n", false, "list the files that would be rewritten, change nothing")
+	c.Flags().BoolVarP(&dry, "dry-run", "n", false, "list what would be rewritten, change nothing")
+	c.Flags().BoolVar(&relative, "relative", false, `make pip/distlib launchers relocatable: #!"<launcher_dir>\python.exe"`)
 	return c
 }
 

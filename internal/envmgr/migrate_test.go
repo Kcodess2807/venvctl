@@ -20,6 +20,15 @@ func TestMigrateFromPygo(t *testing.T) {
 	}
 	src := filepath.Join(old, "envs", "small")
 	mkvenv(t, src)
+	// A console-script launcher made by the installed uv, so repair of the current launcher
+	// format (trailer before uv 0.9.9, RT_RCDATA after) is part of the migration test.
+	launcher := false
+	if _, err := exec.Command("uv", "pip", "install", "-q", "--offline", "--python",
+		filepath.Join(src, "Scripts", "python.exe"), "pyflakes").CombinedOutput(); err == nil {
+		launcher = true
+	} else {
+		t.Log("pyflakes not in the uv cache; migrating without a console-script launcher")
+	}
 	local := filepath.Join(root, "proj", ".venv") // a non-central entry: must be left alone
 
 	reg, _ := json.Marshal(Registry{Envs: []Entry{
@@ -52,6 +61,14 @@ func TestMigrateFromPygo(t *testing.T) {
 	bat, _ := os.ReadFile(filepath.Join(dst, "Scripts", "activate.bat"))
 	if !strings.Contains(string(bat), dst) || strings.Contains(string(bat), src) {
 		t.Fatalf("activate.bat not repaired:\n%s", bat)
+	}
+	if launcher {
+		p := filepath.Join(dst, "Scripts", "pyflakes.exe")
+		b, _ := os.ReadFile(p)
+		t.Logf("migrated launcher format: %s", Classify(p, b))
+		if out, err := exec.Command(p, "--version").CombinedOutput(); err != nil {
+			t.Fatalf("pyflakes.exe after migration: %v\n%s", err, out)
+		}
 	}
 	out, err := exec.Command(filepath.Join(dst, "Scripts", "python.exe"), "-c", "import sys; print(sys.prefix)").Output()
 	if err != nil || !SamePath(strings.TrimSpace(string(out)), dst) {
