@@ -416,6 +416,11 @@ func hookScript(sh string, args []string) (script string, handled bool, err erro
 		if err != nil {
 			return "", true, err
 		}
+		// VIRTUAL_ENV without venvctl's saved PATH means VS Code (or another activate script) set it.
+		if cur := os.Getenv("VIRTUAL_ENV"); cur != "" && !envmgr.SamePath(cur, e.Path) &&
+			os.Getenv("_VENVCTL_OLD_PATH") == "" && os.Getenv("_PYGO_OLD_PATH") == "" {
+			note("note: %s was already active (set by VS Code/another tool); switching", filepath.Base(filepath.Dir(cur))+`\`+filepath.Base(cur))
+		}
 		e.LastUsed = time.Now()
 		reg.Upsert(e)
 		reg.Save()

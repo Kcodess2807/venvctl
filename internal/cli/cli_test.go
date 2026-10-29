@@ -233,6 +233,29 @@ func TestAutoActivateTransitions(t *testing.T) {
 	}
 }
 
+func TestOnNotesForeignVenv(t *testing.T) {
+	t.Setenv("VENVCTL_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	venv := filepath.Join(t.TempDir(), "proj", ".venv")
+	fakeVenv(t, venv, true)
+	t.Setenv("VIRTUAL_ENV", filepath.Join(t.TempDir(), "vscode-picked", ".venv"))
+	t.Setenv("_VENVCTL_OLD_PATH", "")
+	t.Setenv("_PYGO_OLD_PATH", "")
+	var out, errOut bytes.Buffer
+	code := Run([]string{"__shell", "pwsh", "on", venv}, &out, &errOut, strings.NewReader(""))
+	if code != 0 || !strings.Contains(errOut.String(), "was already active (set by VS Code/another tool); switching") ||
+		!strings.Contains(out.String(), "$env:VIRTUAL_ENV = '"+venv+"'") {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out.String(), errOut.String())
+	}
+	// Our own earlier activation (saved PATH present) is not "someone else's".
+	t.Setenv("_VENVCTL_OLD_PATH", `C:\Windows`)
+	errOut.Reset()
+	Run([]string{"__shell", "pwsh", "on", venv}, &bytes.Buffer{}, &errOut, strings.NewReader(""))
+	if strings.Contains(errOut.String(), "already active") {
+		t.Errorf("noted our own activation as foreign: %s", errOut.String())
+	}
+}
+
 func TestPrune(t *testing.T) {
 	la := t.TempDir()
 	t.Setenv("LOCALAPPDATA", la)

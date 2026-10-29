@@ -70,6 +70,22 @@ func TestFilterProfileIdempotentAndStale(t *testing.T) {
 	}
 }
 
+// VS Code's shellStartup activation writes its own block into $PROFILE; it must survive init.
+func TestFilterProfileKeepsVSCodeBlock(t *testing.T) {
+	vscode := strings.Join([]string{
+		"#region vscode python",
+		"# >>> vscode python",
+		"if ($env:VSCODE_PYTHON_PWSH_ACTIVATE) { . $env:VSCODE_PYTHON_PWSH_ACTIVATE }",
+		"# <<< vscode python",
+		"#endregion",
+	}, "\r\n")
+	in := vscode + "\r\n# pyGo shell hook\r\n& 'C:\\Users\\me\\AppData\\Local\\pygo\\bin\\pygo.exe' init pwsh | Out-String | Invoke-Expression\r\n"
+	r := filterProfile(in, own, "\r\n")
+	if !strings.HasPrefix(r.Text, vscode+"\r\n") || r.Removed[genPyGo] != 1 || !r.Added {
+		t.Fatalf("VS Code block not preserved:\n%q", r.Text)
+	}
+}
+
 func TestFilterProfileRemove(t *testing.T) {
 	in := "Set-Alias ll Get-ChildItem\n# venvctl shell hook\n" + own + "\n# pyGo shell hook\neval \"$('/c/Users/me/AppData/Local/pygo/bin/pygo.exe' init bash)\"\n"
 	r := filterProfile(in, "", "\n")

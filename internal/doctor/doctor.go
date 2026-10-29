@@ -401,10 +401,12 @@ func hooks(exe string) []Check {
 			problems = append(problems, fmt.Sprintf("%s: stale hook (%s)", h.Shell, h.Detail))
 			fix = "run `venvctl init` to point the hooks at " + exe + ", then restart the shell"
 		case "removed":
-			problems = append(problems, "cmd: venvctl CMD hook removed ("+h.Detail+")")
-			if fix == "" {
-				fix = "run `venvctl init cmd`"
-			}
+			// VS Code's shellStartup mode rewrites the same AutoRun value; say so on its own line.
+			legacy = append(legacy, Check{
+				Name: "venvctl CMD hook removed (AutoRun was rewritten, probably by VS Code)", OK: true, Warn: true,
+				Detail: h.Detail, Fix: "run `venvctl init cmd` (it keeps VS Code's AutoRun entry and adds venvctl's back)",
+			})
+			problems = append(problems, "cmd: removed from AutoRun")
 		default:
 			problems = append(problems, h.Shell+": missing")
 			if fix == "" {
