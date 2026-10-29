@@ -761,23 +761,40 @@ type lockerJSON struct {
 	Exe       string   `json:"exe"`
 	OpenFiles []string `json:"open_files"`
 	Protected bool     `json:"protected"`
+	Source    string   `json:"source"` // "Restart Manager" or "File Locksmith"
+}
+
+// nukeOpts are the choices shared by nuke and prune.
+type nukeOpts struct {
+	force, dry bool
+	wait       time.Duration // keep retrying a locked rename this long (antivirus); 0 = short backoff
 }
 
 func nukeCmd() *cobra.Command {
-	var force, dry bool
+	var o nukeOpts
 	c := &cobra.Command{
 		Use:     "nuke <name|path>...",
 		Aliases: []string{"rm", "remove"},
 		GroupID: "maintain",
 		Short:   "Delete venvs, first finding and (with your OK) stopping processes that lock them",
-		Long: "Finds processes holding the venv's .exe/.dll/.pyd files (Windows Restart Manager), shows them,\n" +
-			"and asks before terminating them. Editors and shells (VS Code, PyCharm, PowerShell, ...) are never\n" +
-			"terminated. The venv is renamed away before deleting, so a locked venv is never half-deleted.",
+		Long: `Finds processes holding the venv's .exe/.dll/.pyd files (Windows Restart Manager), shows them,
+and asks before terminating them. Editors and shells (VS Code, PyCharm, PowerShell, ...) are never
+terminated. The venv is renamed away before deleting, so a locked venv is never half-deleted.
+
+The Restart Manager cannot see open .py or log files, or a terminal or Explorer window whose
+current folder is inside the venv. If the rename still fails and it named nobody, venvctl asks
+PowerToys File Locksmith (if installed) for a full handle scan, read-only, and applies the same
+refusal list and [y/N]. Running venvctl from inside the venv itself is refused up front.
+--wait keeps retrying for antivirus/EDR scanners that hold new files for seconds (max 60s).`,
 		Example: `  venvctl nuke old-api
   venvctl nuke D:\PROJECTS\x\.venv --dry-run
-  venvctl nuke a b c --force`,
+  venvctl nuke a b c --force
+  venvctl nuke big-torch-env --wait 30s`,
 		Args: nargs(cobra.MinimumNArgs(1)),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if o.wait < 0 || o.wait > envmgr.MaxDeleteWait {
+				return Fail(exitUsage, fmt.Sprintf("--wait %s is out of range", o.wait), "use a duration from 0 to 60s, like --wait 30s")
+			}
 			reg := envmgr.LoadRegistry()
 			var targets []envmgr.Entry
 			for _, a := range args {
@@ -787,26 +804,27 @@ func nukeCmd() *cobra.Command {
 				}
 				targets = append(targets, e)
 			}
-			return finishNuke(reg, targets, force, dry)
+			return finishNuke(reg, targets, o)
 		},
 	}
-	c.Flags().BoolVarP(&force, "force", "f", false, "terminate locking processes without asking (never editors or shells)")
-	c.Flags().BoolVarP(&dry, "dry-run", "n", false, "show lockers and what would be deleted, change nothing")
+	c.Flags().BoolVarP(&o.force, "force", "f", false, "terminate locking processes without asking (never editors or shells)")
+	c.Flags().BoolVarP(&o.dry, "dry-run", "n", false, "show lockers and what would be deleted, change nothing")
+	c.Flags().DurationVar(&o.wait, "wait", 0, "keep retrying a locked delete this long, for antivirus/EDR (max 60s)")
 	return c
 }
 
 // finishNuke deletes targets, saves the registry, prints results and picks the exit code:
 // 1 if any failed, else 3 if any were refused.
-func finishNuke(reg *envmgr.Registry, targets []envmgr.Entry, force, dry bool) error {
+func finishNuke(reg *envmgr.Registry, targets []envmgr.Entry, o nukeOpts) error {
 	var results []nukeResult
 	for _, e := range targets {
-		r := nukeOne(reg, e, force, dry)
+		r := nukeOne(reg, e, o)
 		results = append(results, r)
 		if !opt.json {
 			printNuke(r)
 		}
 	}
-	if !dry {
+	if !o.dry {
 		if err := reg.Save(); err != nil {
 			printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `venvctl scan` to resync it"})
 		}
@@ -833,7 +851,32 @@ func finishNuke(reg *envmgr.Registry, targets []envmgr.Entry, force, dry bool) e
 	return done(code)
 }
 
-func nukeOne(reg *envmgr.Registry, e envmgr.Entry, force, dry bool) nukeResult {
+func toLockerJSON(l winapi.Locker) lockerJSON {
+	return lockerJSON{l.PID, l.Name, l.Parent, l.Exe, l.OpenFiles, l.Protected(), l.Source}
+}
+
+// insideDir reports whether p is dir or below it (case-insensitive, path boundary).
+func insideDir(p, dir string) bool {
+	p, dir = strings.ToLower(filepath.Clean(p)), strings.ToLower(filepath.Clean(dir))
+	return p == dir || strings.HasPrefix(p, dir+`\`)
+}
+
+// deleteVenv runs the rename-first delete, printing a dot per retry when --wait is used.
+func deleteVenv(path string, wait time.Duration) error {
+	dots := 0
+	err := envmgr.DeleteWait(path, wait, func() {
+		if !opt.quiet && !opt.json {
+			fmt.Fprint(stderr, ".")
+			dots++
+		}
+	})
+	if dots > 0 {
+		fmt.Fprintln(stderr)
+	}
+	return err
+}
+
+func nukeOne(reg *envmgr.Registry, e envmgr.Entry, o nukeOpts) nukeResult {
 	r := nukeResult{Name: e.Name, Path: e.Path, Lockers: []lockerJSON{}, SweptTrash: []string{}}
 	fail := func(code int, msg, fix string) nukeResult {
 		r.err = &exitError{code: code, msg: msg, fix: fix}
@@ -842,33 +885,62 @@ func nukeOne(reg *envmgr.Registry, e envmgr.Entry, force, dry bool) nukeResult {
 	}
 	if _, err := os.Stat(e.Path); err != nil {
 		r.Status = "would-unregister"
-		if !dry {
+		if !o.dry {
 			reg.Remove(e.Path)
 			r.Status = "unregistered"
 		}
 		return r
+	}
+	// The Restart Manager never reports a process whose current folder is inside the venv, and
+	// that includes the shell running venvctl. Catch the commonest case up front.
+	if cwd, err := os.Getwd(); err == nil && insideDir(cwd, e.Path) {
+		r.Status = "refused"
+		return fail(exitRefused, "your current directory is inside "+e.Path+"; cd out and retry",
+			"cd to a folder outside the venv (for example the project folder), then rerun venvctl nuke")
 	}
 	lockers, err := winapi.LockingProcesses(e.Path)
 	if err != nil {
 		note("%s lock detection failed for %s: %v; trying to delete anyway", warnMark(), e.Path, err)
 	}
 	for _, l := range lockers {
-		r.Lockers = append(r.Lockers, lockerJSON{l.PID, l.Name, l.Parent, l.Exe, l.OpenFiles, l.Protected()})
+		r.Lockers = append(r.Lockers, toLockerJSON(l))
 	}
 	size := envmgr.Size(e.Path)
-	if dry {
+	if o.dry {
 		r.Status, r.FreedBytes = "would-delete", size
 		return r
 	}
+	refused := func(err error) nukeResult {
+		var ee *exitError
+		errors.As(err, &ee)
+		r.Status = "refused"
+		return fail(ee.code, ee.msg, ee.fix)
+	}
 	if len(lockers) > 0 {
-		if err := killLockers(e.Path, lockers, force); err != nil {
-			var ee *exitError
-			errors.As(err, &ee)
-			r.Status = "refused"
-			return fail(ee.code, ee.msg, ee.fix)
+		if err := killLockers(e.Path, lockers, o.force); err != nil {
+			return refused(err)
 		}
 	}
-	if err := envmgr.Delete(e.Path); err != nil {
+	err = deleteVenv(e.Path, o.wait)
+	var locked *envmgr.LockedError
+	locksmith := winapi.LocksmithCLI()
+	if errors.As(err, &locked) && len(lockers) == 0 && locksmith != "" {
+		// Restart Manager named nobody: ask File Locksmith for a full handle scan (read-only).
+		more, lerr := winapi.LocksmithLockers(locksmith, e.Path)
+		if lerr != nil {
+			note("%s %v", warnMark(), lerr)
+		}
+		for _, l := range more {
+			r.Lockers = append(r.Lockers, toLockerJSON(l))
+		}
+		if len(more) > 0 {
+			if err := killLockers(e.Path, more, o.force); err != nil {
+				return refused(err)
+			}
+			err = deleteVenv(e.Path, o.wait)
+		}
+	}
+	if err != nil {
 		var lo *envmgr.LeftoverError
 		if errors.As(err, &lo) {
 			reg.Remove(e.Path)
@@ -876,8 +948,18 @@ func nukeOne(reg *envmgr.Registry, e envmgr.Entry, force, dry bool) nukeResult {
 			return fail(exitFail, "leftovers remain in "+lo.Trash, `close whatever still uses them, then run: venvctl nuke "`+lo.Trash+`"`)
 		}
 		r.Status = "failed"
+		if len(r.Lockers) == 0 {
+			fix := "common causes: a terminal or Explorer window open inside the folder, an open log or .py file, or antivirus/EDR scanning it. Close them and retry"
+			if locksmith == "" {
+				fix += ", or install PowerToys File Locksmith for a full scan"
+			} else {
+				fix += " (File Locksmith found nothing either)"
+			}
+			fix += ". For antivirus, retry with --wait 30s; venvs on a Dev Drive avoid most real-time scanning"
+			return fail(exitFail, "something still holds "+e.Path+" but Windows didn't say what; nothing was deleted", fix)
+		}
 		return fail(exitFail, e.Path+" is still locked; nothing was deleted",
-			"close the program using it (`venvctl nuke --dry-run "+e.Name+"` lists lockers), then retry")
+			"close the program using it (`venvctl nuke --dry-run "+e.Name+"` lists lockers), then retry, or add --wait 30s")
 	}
 	reg.Remove(e.Path)
 	r.Status, r.FreedBytes = "deleted", size
@@ -924,6 +1006,9 @@ func lockerTable(w io.Writer, ls []lockerJSON) {
 		if l.Protected {
 			name += paint(yellow, " (editor/shell)")
 		}
+		if l.Source == winapi.SourceFileLocksmith {
+			name += dim(" (via File Locksmith)")
+		}
 		rows = append(rows, []string{strconv.Itoa(int(l.PID)), name, orDash(l.Parent), files})
 	}
 	table(w, []string{"PID", "NAME", "SPAWNED BY", "OPEN FILES"}, rows, 0)
@@ -935,7 +1020,7 @@ func killLockers(dir string, lockers []winapi.Locker, force bool) error {
 	var ls []lockerJSON
 	var blocked []string
 	for _, l := range lockers {
-		ls = append(ls, lockerJSON{l.PID, l.Name, l.Parent, l.Exe, l.OpenFiles, l.Protected()})
+		ls = append(ls, toLockerJSON(l))
 		if l.Protected() {
 			blocked = append(blocked, fmt.Sprintf("%s (PID %d)", filepath.Base(l.Exe), l.PID))
 		}
@@ -1056,7 +1141,7 @@ func pruneCmd() *cobra.Command {
 			var refused []string
 			if proceed {
 				for _, r := range picked {
-					res := nukeOne(reg, r.Entry, false, false)
+					res := nukeOne(reg, r.Entry, nukeOpts{})
 					results = append(results, res)
 					if !opt.json {
 						printNuke(res)

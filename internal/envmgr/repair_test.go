@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---- helpers ----
@@ -350,5 +351,28 @@ func TestCreateCommandRelocatable(t *testing.T) {
 	}
 	if !UvAtLeast(0, 0, 1) || UvAtLeast(999, 0, 0) {
 		t.Error("UvAtLeast comparison is wrong")
+	}
+}
+
+// L2: DeleteWait keeps retrying a locked rename and succeeds once the lock goes away.
+func TestDeleteWait(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "v")
+	os.MkdirAll(dir, 0o755)
+	f, err := os.Create(filepath.Join(dir, "held.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticks := 0
+	if err := DeleteWait(dir, 600*time.Millisecond, func() { ticks++ }); err == nil {
+		t.Fatal("deleted a folder with an open file inside")
+	} else if _, ok := err.(*LockedError); !ok || ticks == 0 {
+		t.Fatalf("err=%T ticks=%d, want LockedError after some retries", err, ticks)
+	}
+	go func() { time.Sleep(700 * time.Millisecond); f.Close() }()
+	if err := DeleteWait(dir, 10*time.Second, nil); err != nil {
+		t.Fatalf("lock released mid-wait, still failed: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("folder still there")
 	}
 }

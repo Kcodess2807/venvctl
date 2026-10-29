@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // fakeVenv makes a folder that looks like a venv (pyvenv.cfg whose home has python.exe).
@@ -253,6 +255,77 @@ func TestOnNotesForeignVenv(t *testing.T) {
 	Run([]string{"__shell", "pwsh", "on", venv}, &bytes.Buffer{}, &errOut, strings.NewReader(""))
 	if strings.Contains(errOut.String(), "already active") {
 		t.Errorf("noted our own activation as foreign: %s", errOut.String())
+	}
+}
+
+// holdFile opens p without FILE_SHARE_DELETE, which blocks renaming its folder, the way an open
+// .py or log file does. The Restart Manager only watches .exe/.dll/.pyd, so it names nobody.
+func holdFile(t *testing.T, p string) {
+	t.Helper()
+	os.WriteFile(p, []byte("print(1)\n"), 0o644)
+	u, _ := windows.UTF16PtrFromString(p)
+	h, err := windows.CreateFile(u, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { windows.CloseHandle(h) })
+}
+
+func TestNukeLocksmithFallbackAndCwd(t *testing.T) {
+	la := t.TempDir()
+	t.Setenv("LOCALAPPDATA", la)
+	work := t.TempDir()
+	venv := filepath.Join(work, "proj", ".venv")
+	fakeVenv(t, venv, true)
+	os.MkdirAll(filepath.Join(venv, "Lib"), 0o755)
+	holdFile(t, filepath.Join(venv, "Lib", "held.py"))
+
+	fake, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "fake-locksmith"))
+	argsFile, jsonFile := filepath.Join(work, "args.txt"), filepath.Join(work, "out.json")
+	t.Setenv("FAKE_LOCKSMITH_ARGS", argsFile)
+	t.Setenv("FAKE_LOCKSMITH_JSON", jsonFile)
+	sys32 := filepath.Join(os.Getenv("SystemRoot"), "System32")
+
+	run := func(path string, args ...string) (int, string) {
+		t.Setenv("PATH", path)
+		var out, errOut bytes.Buffer
+		code := Run(args, &out, &errOut, strings.NewReader(""))
+		return code, out.String() + errOut.String()
+	}
+
+	// File Locksmith names an editor: refused, never killed, and never called with --kill.
+	os.WriteFile(jsonFile, []byte(`{"processes":[{"pid":4242424,"name":"Code.exe","user":"me","files":["`+strings.ReplaceAll(venv, `\`, `\\`)+`"]}]}`), 0o644)
+	code, out := run(fake+";"+sys32, "nuke", venv)
+	if code != 3 || !strings.Contains(out, "via File Locksmith") || !strings.Contains(out, "never terminates editors or shells") {
+		t.Fatalf("locksmith editor case: exit %d\n%s", code, out)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(args), "--json") || strings.Contains(string(args), "--kill") {
+		t.Fatalf("File Locksmith called with %q; want --json and never --kill", args)
+	}
+
+	// File Locksmith names an ordinary process: no console and no --force, so refused (exit 3).
+	os.WriteFile(jsonFile, []byte(`{"processes":[{"pid":4242424,"name":"python.exe","user":"me","files":[]}]}`), 0o644)
+	if code, out := run(fake+";"+sys32, "nuke", venv); code != 3 || !strings.Contains(out, "rerun with --force") {
+		t.Fatalf("locksmith ordinary process: exit %d\n%s", code, out)
+	}
+
+	// No File Locksmith installed: explain the likely causes and suggest it.
+	if code, out := run(sys32, "nuke", venv); code != 1 || !strings.Contains(out, "didn't say what") ||
+		!strings.Contains(out, "install PowerToys File Locksmith") || !strings.Contains(out, "Dev Drive") {
+		t.Fatalf("no locksmith: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(venv, "pyvenv.cfg")); err != nil {
+		t.Fatal("a refused nuke must leave the venv intact")
+	}
+
+	// Running from inside the venv is refused before anything else (exit 3).
+	t.Chdir(filepath.Join(venv, "Lib"))
+	if code, out := run(sys32, "nuke", venv); code != 3 || !strings.Contains(out, "current directory is inside") {
+		t.Fatalf("cwd inside venv: exit %d\n%s", code, out)
+	}
+	if code, out := run(sys32, "nuke", venv, "--wait", "2m"); code != 2 || !strings.Contains(out, "out of range") {
+		t.Fatalf("--wait 2m: exit %d\n%s", code, out)
 	}
 }
 

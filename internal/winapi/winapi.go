@@ -53,6 +53,7 @@ type Locker struct {
 	// OpenFiles are the venv files the process has mapped (its exe, .dll and .pyd modules under
 	// the venv), from a module snapshot. Empty when the snapshot is denied.
 	OpenFiles []string
+	Source    string // SourceRestartManager or SourceFileLocksmith
 }
 
 // modulesUnder lists pid's loaded modules (32- and 64-bit) whose path is inside dir.
@@ -129,7 +130,7 @@ func LockingProcesses(dir string) ([]Locker, error) {
 	out := make([]Locker, 0, count)
 	for _, pi := range infos[:count] {
 		pid := pi.Process.ProcessID
-		l := Locker{PID: pid, Name: windows.UTF16ToString(pi.AppName[:]), Exe: exePath(pid), OpenFiles: modulesUnder(pid, dir)}
+		l := Locker{PID: pid, Name: windows.UTF16ToString(pi.AppName[:]), Exe: exePath(pid), OpenFiles: modulesUnder(pid, dir), Source: SourceRestartManager}
 		if p, ok := parents[pid]; ok {
 			l.Parent = parents[p.ppid].name
 		}
@@ -167,7 +168,9 @@ var protected = map[string]bool{
 }
 
 // Protected reports whether venvctl must not kill this locker.
-func (l Locker) Protected() bool { return protected[strings.ToLower(filepath.Base(l.Exe))] }
+func (l Locker) Protected() bool {
+	return protected[strings.ToLower(filepath.Base(l.Exe))] || protected[strings.ToLower(l.Name)]
+}
 
 func exePath(pid uint32) string {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)

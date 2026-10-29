@@ -352,9 +352,30 @@ func Size(dir string) int64 {
 // Delete renames dir to a sibling trash name first, so a locked venv is left whole instead of
 // half-deleted, then removes the trash. Retries with backoff because handles (killed processes,
 // antivirus scans) release a little late.
-func Delete(dir string) error {
+func Delete(dir string) error { return DeleteWait(dir, 0, nil) }
+
+// MaxDeleteWait caps `nuke --wait`.
+const MaxDeleteWait = 60 * time.Second
+
+// DeleteWait is Delete that keeps retrying the rename for up to wait (capped exponential backoff
+// from 50 ms to 2 s), calling tick before each retry. Antivirus and EDR scanners often hold a
+// freshly written venv for many seconds. wait <= 0 uses Delete's short 0-800 ms schedule.
+func DeleteWait(dir string, wait time.Duration, tick func()) error {
 	trash := fmt.Sprintf("%s.%d.venvctl-trash", dir, time.Now().UnixNano())
-	if err := retry(func() error { return os.Rename(dir, trash) }); err != nil {
+	rename := func() error { return os.Rename(dir, trash) }
+	err := retry(rename)
+	if err != nil && wait > 0 {
+		deadline, delay := time.Now().Add(min(wait, MaxDeleteWait)), 50*time.Millisecond
+		for err != nil && time.Now().Before(deadline) {
+			if tick != nil {
+				tick()
+			}
+			time.Sleep(min(delay, time.Until(deadline)))
+			delay = min(delay*2, 2*time.Second)
+			err = rename()
+		}
+	}
+	if err != nil {
 		return &LockedError{Dir: dir, Err: err}
 	}
 	filepath.WalkDir(trash, func(p string, _ fs.DirEntry, err error) error {
