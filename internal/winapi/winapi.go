@@ -50,6 +50,28 @@ type Locker struct {
 	Name   string
 	Exe    string
 	Parent string // exe name of the parent process, e.g. "Code.exe"
+	// OpenFiles are the venv files the process has mapped (its exe, .dll and .pyd modules under
+	// the venv), from a module snapshot. Empty when the snapshot is denied.
+	OpenFiles []string
+}
+
+// modulesUnder lists pid's loaded modules (32- and 64-bit) whose path is inside dir.
+func modulesUnder(pid uint32, dir string) []string {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPMODULE|windows.TH32CS_SNAPMODULE32, pid)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	prefix := strings.ToLower(filepath.Clean(dir)) + `\`
+	var out []string
+	var me windows.ModuleEntry32
+	me.Size = uint32(unsafe.Sizeof(me))
+	for err = windows.Module32First(snap, &me); err == nil; err = windows.Module32Next(snap, &me) {
+		if p := windows.UTF16ToString(me.ExePath[:]); strings.HasPrefix(strings.ToLower(p), prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // LockingProcesses returns processes holding handles on .exe/.dll/.pyd files under dir.
@@ -107,7 +129,7 @@ func LockingProcesses(dir string) ([]Locker, error) {
 	out := make([]Locker, 0, count)
 	for _, pi := range infos[:count] {
 		pid := pi.Process.ProcessID
-		l := Locker{PID: pid, Name: windows.UTF16ToString(pi.AppName[:]), Exe: exePath(pid)}
+		l := Locker{PID: pid, Name: windows.UTF16ToString(pi.AppName[:]), Exe: exePath(pid), OpenFiles: modulesUnder(pid, dir)}
 		if p, ok := parents[pid]; ok {
 			l.Parent = parents[p.ppid].name
 		}

@@ -1,0 +1,169 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"pygo/internal/envmgr"
+	"pygo/internal/shell"
+)
+
+// needHook runs when on/off/cd reach pygo.exe directly, meaning the shell function is not loaded.
+func needHook(c *cobra.Command, _ []string) error {
+	return Fail(exitFail, "`pygo "+c.Name()+"` must change this shell, which needs the pyGo shell hook (not loaded here)",
+		"run `pygo init`, open a new terminal, then retry; in PowerShell you can load it now with: pygo init pwsh | Out-String | iex")
+}
+
+func onCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "on [name|path]",
+		Aliases: []string{"activate"},
+		GroupID: "use",
+		Short:   "Activate a venv: the nearest .venv, a registered name, or a path",
+		Example: `  pygo on
+  pygo on api
+  pygo on D:\PROJECTS\x\.venv`,
+		Args: nargs(cobra.MaximumNArgs(1)),
+		RunE: needHook,
+	}
+}
+
+func offCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "off",
+		Aliases: []string{"deactivate"},
+		GroupID: "use",
+		Short:   "Deactivate the venv pyGo activated; restores PATH and prompt",
+		Example: `  pygo off`,
+		Args:    nargs(cobra.NoArgs),
+		RunE:    needHook,
+	}
+}
+
+func cdCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "cd <name|path>",
+		GroupID: "use",
+		Short:   "Change this shell to a venv's project folder",
+		Example: `  pygo cd api
+  pygo cd gravity-render`,
+		Args: nargs(cobra.ExactArgs(1)),
+		RunE: needHook,
+	}
+}
+
+func initCmd() *cobra.Command {
+	var install bool
+	c := &cobra.Command{
+		Use:     "init [pwsh|powershell|bash|cmd]",
+		GroupID: "setup",
+		Short:   "Install the shell hooks that make on/off/cd work",
+		Long: "With no argument, installs the hook for every detected shell: a line in each PowerShell $PROFILE,\n" +
+			"the CMD AutoRun registry value, and ~/.bashrc for Git Bash.\n\n" +
+			"`pygo init pwsh` and `pygo init bash` print the hook code that those profile lines evaluate;\n" +
+			"add --install to install just that shell. CMD cannot evaluate code, so `pygo init cmd` installs.",
+		Example: `  pygo init
+  pygo init cmd
+  pygo init pwsh | Out-String | Invoke-Expression
+  pygo init bash --install`,
+		ValidArgs: []string{"pwsh", "powershell", "bash", "cmd"},
+		Args:      nargs(cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs)),
+		RunE: func(_ *cobra.Command, args []string) error {
+			sh := ""
+			if len(args) == 1 {
+				sh = args[0]
+			}
+			if sh != "" && sh != "cmd" && !install {
+				s, _ := shell.Init(sh, exePath())
+				_, err := stdout.Write([]byte(s))
+				return err
+			}
+			done, err := shell.Install(exePath(), sh)
+			for _, d := range done {
+				say("%s %s", okMark(), d)
+			}
+			if err != nil {
+				return Fail(exitFail, "some hooks were not installed: "+err.Error(),
+					"fix the file or registry access problem above and rerun `pygo init`")
+			}
+			say(dim("open a new terminal, then: pygo on"))
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&install, "install", false, "with pwsh or bash: install that shell's hook instead of printing it")
+	return c
+}
+
+// shellCmd is called by the shell wrappers. For pwsh/bash it prints a script to evaluate.
+// For cmd it always writes the env file the doskey macro calls, and runs other commands itself.
+func shellCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "__shell <pwsh|cmd|bash> [args...]",
+		Hidden:             true,
+		DisableFlagParsing: true,
+		Args:               nargs(cobra.MinimumNArgs(1)),
+		RunE: func(_ *cobra.Command, args []string) error {
+			sh, rest := args[0], args[1:]
+			script, handled, err := hookScript(sh, rest)
+			if sh != "cmd" {
+				if err != nil {
+					return err
+				}
+				_, werr := stdout.Write([]byte(script))
+				return werr
+			}
+			os.MkdirAll(envmgr.Dir(), 0o755)
+			if werr := os.WriteFile(shell.EnvFile(), []byte(script), 0o644); werr != nil && err == nil {
+				err = Fail(exitFail, "could not write "+shell.EnvFile()+": "+werr.Error(), "check that %LOCALAPPDATA%\\pygo is writable")
+			}
+			if handled || err != nil {
+				return err
+			}
+			return done(Run(rest, stdout, stderr, stdin))
+		},
+	}
+}
+
+// hookScript builds the script for on/off/cd. handled is false for every other command.
+func hookScript(sh string, args []string) (script string, handled bool, err error) {
+	if len(args) == 0 || !shell.Handled(args[0]) {
+		return "", false, nil
+	}
+	target := ""
+	if len(args) > 1 {
+		target = args[1]
+	}
+	reg := envmgr.LoadRegistry()
+	switch args[0] {
+	case "off", "deactivate":
+		return shell.Deactivate(sh), true, nil
+	case "cd":
+		if target == "" {
+			return "", true, Fail(exitUsage, "`pygo cd` needs a name or path", "run `pygo cd <name>`; `pygo list` shows names")
+		}
+		e, err := resolve(reg, target, "cd")
+		if err != nil {
+			return "", true, err
+		}
+		dir := e.Path
+		if e.Project != "" {
+			dir = e.Project
+		} else if b := strings.ToLower(filepath.Base(dir)); b == ".venv" || b == "venv" {
+			dir = filepath.Dir(dir)
+		}
+		return shell.Cd(sh, dir), true, nil
+	default:
+		e, err := resolve(reg, target, "on")
+		if err != nil {
+			return "", true, err
+		}
+		e.LastUsed = time.Now()
+		reg.Upsert(e)
+		reg.Save()
+		return shell.Activate(sh, e.Path, e.Name), true, nil
+	}
+}

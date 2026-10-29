@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -27,6 +28,8 @@ type Entry struct {
 	Version  string    `json:"version"`
 	Central  bool      `json:"central"`
 	LastUsed time.Time `json:"last_used"`
+	Size     int64     `json:"size,omitempty"`    // bytes, cached by the last `list`/`prune`
+	Project  string    `json:"project,omitempty"` // folder holding the .venv redirect file, if any
 }
 
 // Registry is %LOCALAPPDATA%\pygo\registry.json.
@@ -72,8 +75,15 @@ func (r *Registry) Save() error {
 func (r *Registry) Upsert(e Entry) {
 	for i := range r.Envs {
 		if SamePath(r.Envs[i].Path, e.Path) {
+			old := r.Envs[i]
 			if e.LastUsed.IsZero() {
-				e.LastUsed = r.Envs[i].LastUsed
+				e.LastUsed = old.LastUsed
+			}
+			if e.Size == 0 {
+				e.Size = old.Size
+			}
+			if e.Project == "" {
+				e.Project = old.Project
 			}
 			r.Envs[i] = e
 			return
@@ -116,7 +126,7 @@ func FromDir(dir string) (Entry, bool) {
 		name = filepath.Base(project)
 	}
 	central := strings.HasPrefix(strings.ToLower(abs), strings.ToLower(CentralDir())+`\`)
-	return Entry{Name: name, Path: abs, Python: home, Version: ver, Central: central}, true
+	return Entry{Name: name, Path: abs, Python: home, Version: ver, Central: central, Project: project}, true
 }
 
 // readRedirect reads a PEP 832 `.venv` redirect file: one UTF-8 line holding a venv path,
@@ -201,47 +211,76 @@ func (e *AmbiguousError) Error() string {
 	return fmt.Sprintf("%q matches %d environments", e.Name, len(e.Hits))
 }
 
-// Create makes a venv with `uv venv` when available, else `python -m venv`.
-// local=true creates .\.venv; otherwise %LOCALAPPDATA%\pygo\envs\<name>.
-func Create(name, pyver string, local bool) (Entry, error) {
-	var dest string
-	if local {
-		dest, _ = filepath.Abs(".venv")
-	} else {
-		if name == "" {
-			return Entry{}, errors.New("a name is required for a central environment (or pass --local)")
-		}
-		dest = filepath.Join(CentralDir(), name)
-	}
-	if _, err := os.Stat(filepath.Join(dest, "pyvenv.cfg")); err == nil {
-		return Entry{}, fmt.Errorf("%s already exists", dest)
-	}
-	var cmd *exec.Cmd
+// CreateCommand returns the command that creates a venv at dest: `uv venv` when uv is on PATH,
+// else `<python> -m venv`. py is "", a version ("3.12", "3.12.3") or a path to python.exe.
+func CreateCommand(dest, py string) ([]string, error) {
 	if uv, err := exec.LookPath("uv"); err == nil {
-		args := []string{"venv", dest}
-		if pyver != "" {
-			args = append(args, "--python", pyver)
+		args := []string{uv, "venv", dest}
+		if py != "" {
+			args = append(args, "--python", py)
 		}
-		cmd = exec.Command(uv, args...)
-	} else {
-		exe, err := discovery.FindInterpreter(pyver)
-		if err != nil {
-			return Entry{}, err
-		}
-		cmd = exec.Command(exe, "-m", "venv", dest)
+		return args, nil
 	}
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	exe := py
+	if !IsInterpreterPath(py) {
+		var err error
+		if exe, err = discovery.FindInterpreter(py); err != nil {
+			return nil, err
+		}
+	}
+	return []string{exe, "-m", "venv", dest}, nil
+}
+
+// IsInterpreterPath reports whether a --python value is a path rather than a version.
+func IsInterpreterPath(py string) bool {
+	return strings.ContainsAny(py, `\/`) || strings.HasSuffix(strings.ToLower(py), ".exe")
+}
+
+// Create runs args (from CreateCommand), sending its output to out, and returns the new venv.
+func Create(dest string, args []string, out io.Writer) (Entry, error) {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
-		return Entry{}, fmt.Errorf("venv creation failed: %w", err)
+		return Entry{}, fmt.Errorf("%s failed: %w", filepath.Base(args[0]), err)
 	}
 	e, ok := FromDir(dest)
 	if !ok {
-		return Entry{}, fmt.Errorf("created %s but found no pyvenv.cfg", dest)
-	}
-	if name != "" {
-		e.Name = name
+		return Entry{}, fmt.Errorf("%s ran but left no pyvenv.cfg in %s", filepath.Base(args[0]), dest)
 	}
 	return e, nil
+}
+
+// CloudRoot returns the synced folder (OneDrive, Dropbox, Google Drive, iCloudDrive) that
+// contains path, or "" when path is not inside one.
+func CloudRoot(path string) string {
+	var roots []string
+	for _, v := range []string{"OneDrive", "OneDriveCommercial", "OneDriveConsumer"} {
+		if p := os.Getenv(v); p != "" {
+			roots = append(roots, p)
+		}
+	}
+	for _, d := range []string{"Dropbox", "Google Drive", "iCloudDrive"} {
+		roots = append(roots, filepath.Join(os.Getenv("USERPROFILE"), d))
+	}
+	lp := strings.ToLower(filepath.Clean(path)) + `\`
+	for _, r := range roots {
+		if strings.HasPrefix(lp, strings.ToLower(filepath.Clean(r))+`\`) {
+			return r
+		}
+	}
+	return ""
+}
+
+// Activity is the best guess of when a venv was last used: pygo's own last_used stamp, or the
+// newest modification time of the venv folder, pyvenv.cfg or site-packages (changes on install).
+func Activity(e Entry) time.Time {
+	t := e.LastUsed
+	for _, p := range []string{e.Path, filepath.Join(e.Path, "pyvenv.cfg"), filepath.Join(e.Path, "Lib", "site-packages")} {
+		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(t) {
+			t = fi.ModTime()
+		}
+	}
+	return t
 }
 
 // Size sums file sizes under dir.
@@ -263,15 +302,8 @@ func Size(dir string) int64 {
 // antivirus scans) release a little late.
 func Delete(dir string) error {
 	trash := fmt.Sprintf("%s.%d.pygo-trash", dir, time.Now().UnixNano())
-	var err error
-	for _, wait := range []time.Duration{0, 50, 100, 200, 400, 800} {
-		time.Sleep(wait * time.Millisecond)
-		if err = os.Rename(dir, trash); err == nil {
-			break
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("still locked, nothing deleted: %w", err)
+	if err := retry(func() error { return os.Rename(dir, trash) }); err != nil {
+		return &LockedError{Dir: dir, Err: err}
 	}
 	filepath.WalkDir(trash, func(p string, _ fs.DirEntry, err error) error {
 		if err == nil {
@@ -279,13 +311,39 @@ func Delete(dir string) error {
 		}
 		return nil
 	})
-	for _, wait := range []time.Duration{0, 50, 100, 200, 400, 800} {
-		time.Sleep(wait * time.Millisecond)
-		if err = os.RemoveAll(trash); err == nil {
+	if err := retry(func() error { return os.RemoveAll(trash) }); err != nil {
+		return &LeftoverError{Dir: dir, Trash: trash, Err: err}
+	}
+	return nil
+}
+
+// retry runs f with backoff 0/50/100/200/400/800 ms until it succeeds.
+func retry(f func() error) (err error) {
+	for _, ms := range []time.Duration{0, 50, 100, 200, 400, 800} {
+		time.Sleep(ms * time.Millisecond)
+		if err = f(); err == nil {
 			return nil
 		}
 	}
-	return fmt.Errorf("venv removed from %s but leftovers remain in %s: %w", dir, trash, err)
+	return err
+}
+
+// LockedError: the venv could not be renamed away, so nothing was deleted.
+type LockedError struct {
+	Dir string
+	Err error
+}
+
+func (e *LockedError) Error() string { return fmt.Sprintf("%s is still locked: %v", e.Dir, e.Err) }
+
+// LeftoverError: the venv is gone from its folder, but some files remain in Trash.
+type LeftoverError struct {
+	Dir, Trash string
+	Err        error
+}
+
+func (e *LeftoverError) Error() string {
+	return fmt.Sprintf("venv removed from %s, but leftovers remain in %s: %v", e.Dir, e.Trash, e.Err)
 }
 
 // python -m venv: set "VIRTUAL_ENV=C:\x"     uv: for %%i in ("C:\x") do @set "VIRTUAL_ENV=%%~fi"

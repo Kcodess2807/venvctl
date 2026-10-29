@@ -5,20 +5,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
-
-// Venv is a directory containing pyvenv.cfg.
-type Venv struct {
-	Path    string // venv directory
-	Home    string // base interpreter directory (pyvenv.cfg "home")
-	Version string
-}
 
 // ParsePyvenvCfg reads dir\pyvenv.cfg. ok is false when the file is absent.
 func ParsePyvenvCfg(dir string) (home, version string, ok bool) {
@@ -52,12 +48,18 @@ var skipDirs = map[string]bool{
 	"node_modules": true, ".git": true, "__pycache__": true, ".cache": true, "site-packages": true,
 }
 
-// Scan walks roots concurrently and returns every directory holding a pyvenv.cfg.
-// It does not descend into a venv once found, nor into skipDirs or symlinks.
-func Scan(roots []string) []Venv {
+// Progress counts scan work. Read it from another goroutine while Scan runs.
+type Progress struct{ Dirs, Found atomic.Int64 }
+
+// Scan walks roots concurrently and returns every directory holding a pyvenv.cfg, sorted.
+// It does not descend into a venv once found, nor into skipDirs or symlinks. p may be nil.
+func Scan(roots []string, p *Progress) []string {
+	if p == nil {
+		p = &Progress{}
+	}
 	var (
 		mu  sync.Mutex
-		out []Venv
+		out []string
 		wg  sync.WaitGroup
 		sem = make(chan struct{}, 64)
 	)
@@ -68,14 +70,15 @@ func Scan(roots []string) []Venv {
 		sem <- struct{}{}
 		ents, err := os.ReadDir(dir)
 		<-sem
+		p.Dirs.Add(1)
 		if err != nil {
 			return
 		}
 		for _, e := range ents {
 			if !e.IsDir() && e.Name() == "pyvenv.cfg" {
-				home, ver, _ := ParsePyvenvCfg(dir)
+				p.Found.Add(1)
 				mu.Lock()
-				out = append(out, Venv{Path: dir, Home: home, Version: ver})
+				out = append(out, dir)
 				mu.Unlock()
 				return
 			}
@@ -93,7 +96,7 @@ func Scan(roots []string) []Venv {
 		go walk(r)
 	}
 	wg.Wait()
-	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Path) < strings.ToLower(out[j].Path) })
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i]) < strings.ToLower(out[j]) })
 	return out
 }
 
@@ -169,7 +172,7 @@ func Interpreters() []Interpreter {
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Version != out[j].Version {
-			return versionLess(out[j].Version, out[i].Version)
+			return CompareVersions(out[i].Version, out[j].Version) > 0
 		}
 		return out[i].Arch == "64bit" && out[j].Arch != "64bit"
 	})
@@ -221,24 +224,18 @@ func regStr(root registry.Key, path, name string) string {
 	return v
 }
 
-func versionLess(a, b string) bool {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		x, y := atoiPrefix(as[i]), atoiPrefix(bs[i])
-		if x != y {
-			return x < y
-		}
-	}
-	return len(as) < len(bs)
-}
+// CompareVersions compares dotted versions numerically, so "3.10" > "3.9". Each part counts only
+// its leading digits ("0rc3" is 0); a shorter version that is a prefix sorts first.
+func CompareVersions(a, b string) int { return slices.Compare(versionParts(a), versionParts(b)) }
 
-func atoiPrefix(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			break
+func versionParts(v string) []int {
+	var out []int
+	for _, p := range strings.Split(v, ".") {
+		if i := strings.IndexFunc(p, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+			p = p[:i]
 		}
-		n = n*10 + int(c-'0')
+		n, _ := strconv.Atoi(p)
+		out = append(out, n)
 	}
-	return n
+	return out
 }

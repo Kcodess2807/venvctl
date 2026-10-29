@@ -144,11 +144,22 @@ func Cd(sh, path string) string {
 }
 
 // Install writes the hook into every shell profile found. Returns the files/keys touched.
-func Install(exe string) ([]string, error) {
+// only limits it to one shell: "pwsh"/"powershell" (every installed PowerShell), "cmd" or "bash";
+// "" installs all.
+func Install(exe, only string) ([]string, error) {
 	var done []string
 	var errs []error
+	want := func(sh string) bool {
+		if only == "powershell" {
+			only = "pwsh"
+		}
+		return only == "" || only == sh
+	}
 
 	for _, ps := range PowerShells() {
+		if !want("pwsh") {
+			break
+		}
 		profile := Profiles()[ps]
 		line := fmt.Sprintf("& '%s' init pwsh | Out-String | Invoke-Expression", psq(exe))
 		if err := appendOnce(profile, line, "\r\n"); err != nil {
@@ -159,19 +170,21 @@ func Install(exe string) ([]string, error) {
 	}
 
 	// CMD: doskey macro defined by a hook file that HKCU Command Processor\AutoRun calls.
-	hook := hookFile()
-	script, _ := Init("cmd", exe)
-	os.MkdirAll(hookDir(), 0o755)
-	if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
-		errs = append(errs, err)
-	} else if err := setAutoRun(fmt.Sprintf(`if exist "%s" call "%s"`, hook, hook)); err != nil {
-		errs = append(errs, fmt.Errorf("cmd AutoRun: %w", err))
-	} else {
-		done = append(done, `HKCU\Software\Microsoft\Command Processor\AutoRun -> `+hook)
+	if want("cmd") {
+		hook := hookFile()
+		script, _ := Init("cmd", exe)
+		os.MkdirAll(hookDir(), 0o755)
+		if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
+			errs = append(errs, err)
+		} else if err := setAutoRun(fmt.Sprintf(`if exist "%s" call "%s"`, hook, hook)); err != nil {
+			errs = append(errs, fmt.Errorf("cmd AutoRun: %w", err))
+		} else {
+			done = append(done, `HKCU\Software\Microsoft\Command Processor\AutoRun -> `+hook)
+		}
 	}
 
 	// Git Bash
-	if _, err := exec.LookPath("bash"); err == nil {
+	if _, err := exec.LookPath("bash"); err == nil && want("bash") {
 		rc := filepath.Join(os.Getenv("USERPROFILE"), ".bashrc")
 		line := fmt.Sprintf(`eval "$('%s' init bash)"`, posix(exe))
 		if err := appendOnce(rc, line, "\n"); err != nil {

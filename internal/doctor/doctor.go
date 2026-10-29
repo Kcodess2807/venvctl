@@ -25,6 +25,17 @@ type Check struct {
 	Fix    string
 }
 
+// Status is "ok", "warn" or "fail". Warn wins over OK=false.
+func (c Check) Status() string {
+	switch {
+	case c.Warn:
+		return "warn"
+	case !c.OK:
+		return "fail"
+	}
+	return "ok"
+}
+
 // Run executes every check. exe is the running pygo.exe, which hooks must point at.
 func Run(exe string) []Check {
 	return []Check{
@@ -161,23 +172,10 @@ func execPolicy() Check {
 // cloudVenvs flags registered venvs inside synced folders: thousands of files upload, and locks follow.
 func cloudVenvs() Check {
 	c := Check{Name: "venvs in cloud-synced folders", OK: true}
-	var roots []string
-	for _, v := range []string{"OneDrive", "OneDriveCommercial", "OneDriveConsumer"} {
-		if p := os.Getenv(v); p != "" {
-			roots = append(roots, strings.ToLower(filepath.Clean(p))+`\`)
-		}
-	}
-	for _, d := range []string{"Dropbox", "Google Drive", "iCloudDrive"} {
-		roots = append(roots, strings.ToLower(filepath.Join(os.Getenv("USERPROFILE"), d))+`\`)
-	}
 	var hits []string
-	for _, p := range envmgr.LoadRegistry().Envs {
-		lp := strings.ToLower(p.Path) + `\`
-		for _, r := range roots {
-			if strings.HasPrefix(lp, r) {
-				hits = append(hits, p.Path)
-				break
-			}
+	for _, e := range envmgr.LoadRegistry().Envs {
+		if envmgr.CloudRoot(e.Path) != "" {
+			hits = append(hits, e.Path)
 		}
 	}
 	if len(hits) == 0 {
