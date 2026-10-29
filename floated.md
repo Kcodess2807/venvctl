@@ -88,14 +88,55 @@ Renamed to venvctl. Reason: `pygo` collides with an existing ReiterAdam/pygo ven
 Entries 1-16 above keep the names that were current when they were written (`pygo`, `_PYGO_OLD_PATH`, `%LOCALAPPDATA%\pygo`, ...); today each is the `venvctl` equivalent (`venvctl-complete.md` section 11b has the full table).
 - **Compatibility, kept small on purpose.** `off`/`on` adopt and clear the `_PYGO_OLD_*` variables of shells activated before the rename. Old `.pygo-trash`/`.wv-trash` folders count as trash. There is no `pygo` alias.
 - **`venvctl init` cleans up both older hook generations itself** (WinVenv and pyGo), which replaces the manual paste-in snippet from entry 16. It filters line-by-line and segment-by-segment in pure functions, so the rules are unit-tested on strings. It keeps profile encoding and line endings, writes `.bashrc` LF without a BOM, and keeps VS Code's AutoRun segment in order. It has `--dry-run` and `--remove`.
-- **Migration on first run, not at install time.** It is triggered by a missing `venvctlegistry.json` (not a missing folder, so an already-copied `bin` does not block it). Central envs are renamed, not copied, and then repaired, because their launchers embed absolute paths. The old folder is never deleted.
+- **Migration on first run, not at install time.** It is triggered by a missing `venvctl
+egistry.json` (not a missing folder, so an already-copied `bin` does not block it). Central envs are renamed, not copied, and then repaired, because their launchers embed absolute paths. The old folder is never deleted.
 - **`VENVCTL_HOME`** overrides the state root. Legacy folders are then its siblings, which keeps tests off the real `%LOCALAPPDATA%`.
 - **Found while testing the compat code:** PowerShell's `Get-Item`/`Remove-Item` silently ignore a `function:global:` prefix, so the prompt was never restored by `off` (this was true in pyGo and WinVenv too). Prompt functions are now read and written as `${function:global:name}` and removed by unqualified path. Verified by an on/off round trip whose prompt matches before and after.
 
+## 18. Hook checks compare the exe each hook calls (Phase 0)
+Matching the text `init pwsh` counted old `wv` lines as installed. Each hook line's quoted exe is now extracted and compared with the running `venvctl.exe`, so a hook that calls another exe is reported as "stale". Profile paths come from the Documents known folder instead of spawning PowerShell. That's faster, follows OneDrive redirection, and removed a duplicate lookup (audit item 5).
+
+## 19. One error and exit-code contract (Phase 1)
+- **`Fail(code, msg, fix)` everywhere.** It prints `✗ msg` then `  → fix`, or JSON on stderr in `--json` mode. Cobra's own errors are classified into exit 2.
+- **Exit 4 for "nothing to do".** An empty `list`, `prune` with no candidates, `repair` with nothing to fix, an existing `link`, a repeated `allow`/`deny`. Scripts can branch on it, and the message prints as a note, not an error.
+- **Color only on a real console.** It's off for `--no-color`, `NO_COLOR`, `--json` and output that isn't a console. The console is switched to VT mode, and if that fails there's no color.
+- **Padding-aware table helper instead of tabwriter.** tabwriter counted ANSI codes as width, which misaligned styled headers.
+- **`Run(args, out, err, in) int`** so tests drive the real command tree with captured output. No mocks.
+
+## 20. Estimated last activity, so age filters are safe (Phases 1-2)
+`last_used` only exists for venvs activated through venvctl, and all 77 of yours were "never". If `--older-than` used only that, it would select everything, which is dangerous for `prune`. `last_activity` takes the newest of `last_used` and the modification times of the venv folder, `pyvenv.cfg` and `site-packages`, which changes on every install. It's shown with a `~` in `list`. Prune also needs at least one criterion and never selects the active venv.
+
+## 21. Ambiguous names: ask in a console, print the commands otherwise (Phase 0)
+Several of your venvs share a name. A console gets a numbered picker. Anything else (scripts, `--json`, mintty) gets exit 2 and the exact `venvctl <verb> "<path>"` lines, so it's never a dead end and never a guess.
+
+## 22. Redirect files are written by default for central envs (Phase 3)
+This reverses entry 15's "read-only" stance, on your instruction. The safety rules keep it reversible:
+- conflicts are checked *before* the env is created
+- a `.venv` folder is never replaced
+- a redirect pointing elsewhere is replaced only with consent or `--force`
+- `--no-redirect` skips it, and `unlink` undoes it
+
+Doctor's IDE check accepts either a project redirect or a VS Code-family settings entry. It parses `settings.json` as JSON with comments and trailing commas, and never edits it.
+
+## 23. Auto-activate: trust plus cheap hooks (Phase 4)
+- **Trust is explicit** (`allow`), because putting a folder's `Scripts` on PATH runs its code on the next `python`.
+- **`trust.json` keys are lower case with forward slashes**, so the hooks check membership with a substring search for `"<key>"`. That needs no JSON parsing in PowerShell, bash or Lua, and `SetEscapeHTML(false)` keeps `&` literal.
+- **Each shell does the cheap part itself.** PowerShell uses .NET calls only. Bash uses builtins only, plus one `pwd -W` on a root change, because MSYS paths like `/tmp` can't be converted by hand. Lua uses file checks. `venvctl.exe` is spawned only on a trusted root change, or to leave an auto-activated venv. Measured cost with the folder unchanged: 0.43 ms at p99.
+- **`_VENVCTL_AUTO=1` marks what auto-activate owns.** Anything activated without it (you, VS Code) is never deactivated or replaced. A manual `on` clears the mark.
+- **Attachment.** Prompt wrapping by default. oh-my-posh's `Set-PoshContext` and starship's `Invoke-Starship-PreCommand` when they own the prompt. The `cd` wrapper (zoxide-safe) is an explicit opt-in (`VENVCTL_AUTO_HOOK=cd`), because overriding `cd` is the most invasive option.
+- **CMD only through Clink.** Plain CMD has no per-prompt hook. The Clink script is written only while auto-activate is on, and removed otherwise.
+- **The hook is emitted only when enabled.** `init pwsh`/`bash` print it only when config enables it, so turning it off takes effect in new shells without editing profiles.
+
+## 24. Release builds stay unstripped and reproducible (Phase 6)
+`-trimpath`, version from `git describe`, `-X` for the version and date, and never `-s -w` (Defender heuristics). Resources come from `go-winres`, including `longPathAware` in the manifest. Signing is wired but gated on `VENVCTL_SIGN_CERT`; without it, the script prints the exact commands. `.gitattributes` forces LF, because Windows runners check out CRLF and gofmt rejects it.
+
+## 25. Testing without touching your machine
+Every behaviour test runs against `VENVCTL_HOME` or `LOCALAPPDATA` set to a temp folder, with fake or real temp venvs. Running the real exe without it would trigger the first-run migration on your real `%LOCALAPPDATA%`; the safety classifier blocked that twice, correctly. Commands that edit your profile, AutoRun or `.bashrc` (`venvctl init`) are only run as `--dry-run`. `testdata\autocd.ps1` drives a real PowerShell prompt in its own session, and never loads or writes `$PROFILE`.
+
 ## Open items
-- No `pygo prune` (bulk delete by age or size) yet; `list` shows the data it would need.
-- `config.json` is read but never written by a command.
-- `scan` passes the central dir twice if you also give it as a root. Harmless, just a duplicate walk.
-- Repair's byte replace would also hit a longer path that starts with the old one (old `C:\x\proj`, file mentions `C:\x\proj2`). Rare inside a venv's `Scripts\`.
-- Killing a venv `python.exe` launcher can orphan its base-interpreter child. Restart Manager lists that child too only if it maps venv `.pyd`s.
-- Go lives in `%LOCALAPPDATA%\Programs\Go\bin` (now on your user PATH).
+- Run `venvctl init` yourself; your hooks still date from WinVenv.
+- The first `venvctl` run migrates `%LOCALAPPDATA%\pygo`; delete it, and `\winvenv`, after checking `venvctl list`.
+- Clink, oh-my-posh and starship attachment, and interactive prompts are untested here.
+- No release workflow, signing certificate, real icon or README text yet.
+- One `project` per central env.
+- Killing a venv `python.exe` launcher can orphan its base-interpreter child; Restart Manager lists the child only if it maps venv `.pyd` files.

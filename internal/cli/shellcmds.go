@@ -256,6 +256,9 @@ func configCmd() *cobra.Command {
 			cfg := envmgr.LoadConfig()
 			if len(args) == 0 {
 				if opt.json {
+					if cfg.ScanRoots == nil {
+						cfg.ScanRoots = []string{} // stable schema: always an array
+					}
 					return emit(cfg)
 				}
 				say("auto-activate   %s", map[bool]string{true: "on", false: "off"}[cfg.AutoActivate])

@@ -253,7 +253,9 @@ func linkCmd() *cobra.Command {
 				return Fail(exitFail, "linked, but the registry could not be saved: "+err.Error(), "run `venvctl scan "+cwd+"` to resync it")
 			}
 			if opt.json {
-				return emit(linkJSON{cwd, e.Path, filepath.Join(cwd, ".venv"), !already})
+				if err := emit(linkJSON{cwd, e.Path, filepath.Join(cwd, ".venv"), !already}); err != nil {
+					return err
+				}
 			}
 			if already {
 				return nothing(filepath.Join(cwd, ".venv") + " already points at " + e.Path)

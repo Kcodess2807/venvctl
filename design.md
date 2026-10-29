@@ -1,83 +1,115 @@
-# venvctl (`venvctl`) design
+# venvctl design
 
-Windows-native Python venv manager. Go 1.22+, cobra, lipgloss, `x/sys/windows`.
+Windows-native Python venv manager. Go, cobra, lipgloss, `x/sys/windows`. uv creates, venvctl manages.
 
 ## Problem to command map
 
 | Pain | Command | Mechanism |
 |---|---|---|
-| Activation differs per shell, ExecutionPolicy blocks `Activate.ps1` | `venvctl on` / `off` / `cd` | Shell wrapper evals a script `venvctl` prints. No `.ps1` file is run, so policy does not apply. |
-| A binary cannot change its parent's env | same | Wrapper function in the parent shell does the `eval`. |
-| `Access is denied` on delete | `venvctl nuke` | Restart Manager lists lockers, `--force` kills, then retry delete. |
-| Forgotten venvs eating disk | `venvctl scan`, `venvctl list` | Concurrent walk for `pyvenv.cfg`, registry file, sizes. |
-| Renamed folder breaks venv | `venvctl repair` | Rewrite old absolute path inside `Scripts\`. |
-| Misconfigured machine | `venvctl doctor` | Checks listed below. |
+| Activation differs per shell; ExecutionPolicy blocks `Activate.ps1` | `on` / `off` / `cd` | A shell function evaluates a script that `venvctl` prints; no `.ps1` runs |
+| A binary cannot change its parent's env | same | `init` installs the function in `$PROFILE`, CMD AutoRun (via doskey) and `.bashrc` |
+| Typing `on` in every terminal | `config auto-activate on`, `allow` | A prompt hook that spawns only when a trusted root changes |
+| `Access is denied` on delete | `nuke`, `prune` | Restart Manager finds lockers, you confirm, they're terminated, then a rename-first delete |
+| Forgotten venvs eating disk | `scan`, `list`, `prune` | Concurrent `pyvenv.cfg` walk, registry, sizes, estimated last activity |
+| Renamed folder breaks venv | `repair` | Boundary-aware path rewrite in `Scripts\`, aware of uv's launcher trailer |
+| Central venvs invisible to editors | `create`, `link`, `unlink` | PEP 832 `.venv` redirect file |
+| Misconfigured machine | `doctor` | Read-only checks |
 
 ## Layout
 
 ```
-cmd/venvctl/main.go        entry, calls cli.Execute
-internal/cli          cobra commands, output styling
-internal/discovery    pyvenv.cfg scan, PEP 514 registry finder
-internal/envmgr       registry.json, config.json, create, delete, repair
-internal/shell        wrapper/activate/deactivate/cd scripts, profile install
-internal/winapi       Restart Manager, kill, App Execution Alias detection
-internal/doctor       diagnostics
+cmd/venvctl/main.go     os.Exit(cli.Run(...))
+internal/cli            cobra commands, output modes, exit codes, Fail, migration trigger
+internal/discovery      scan (venvs + redirect files, trash skipped), PEP 514, versions
+internal/envmgr         registry, config, trust, FindRoot, resolve, create, delete, repair, redirect, migration
+internal/shell          hook code, activate/deactivate scripts, init (filtering + legacy cleanup), auto-activate hooks
+internal/winapi         Restart Manager, process/module snapshots, kill, Store alias
+internal/doctor         diagnostics
 ```
 
-Dependencies point one way: `cli` -> `{doctor, envmgr, shell, winapi, discovery}`; `envmgr` -> `discovery`; `doctor` -> `{discovery, shell, winapi}`. No cycles.
+Dependencies point one way:
+- `cli` imports everything
+- `doctor` imports `discovery`, `envmgr`, `shell` and `winapi`
+- `shell` imports `envmgr`, which imports `discovery`
+
+There are no cycles and no interfaces.
 
 ## State
 
-`%LOCALAPPDATA%\venvctl\`
-- `registry.json`: every known env (name, path, base python dir, version, central flag, last used).
-- `config.json`: `scan_roots`, `default_python`. Optional, read-only for now.
-- `envs\<name>`: central environments.
-- `venvctl_hook.cmd`, `venvctl_env.cmd`: CMD hook and its per-call output file.
+The state folder is `%LOCALAPPDATA%\venvctl\`, or `VENVCTL_HOME`. It holds `registry.json`, `config.json`, `trust.json`, `envs\<name>`, `venvctl_hook.cmd`, `venvctl_env.cmd` and `bin\venvctl.exe`.
+
+The legacy folders `pygo` and `winvenv` are siblings of it. On the first run venvctl copies pyGo's state, and moves and repairs pyGo's central envs. It never deletes anything.
 
 ## Activation flow
 
 ```
-user types: venvctl on foo
-  shell function venvctl  (installed by `venvctl init`)
-    -> venvctl.exe __shell <pwsh|bash|cmd> on foo      (hidden command)
-         resolve foo -> path, stamp last_used, print script
-    <- script text
-    -> Invoke-Expression / eval
-         sets VIRTUAL_ENV, prepends Scripts to PATH, wraps prompt
+venvctl on foo                       (shell function from `venvctl init`)
+  -> venvctl.exe __shell <pwsh|bash|cmd> on foo
+       resolve foo (dir, central name, registry name; picker on duplicates)
+       print: adopt _PYGO_OLD_* if present; save PATH once in _VENVCTL_OLD_PATH;
+              VIRTUAL_ENV, VIRTUAL_ENV_PROMPT, PATH, prompt; clear _VENVCTL_AUTO
+  <- eval in the current shell
 ```
 
-`_VENVCTL_OLD_PATH` stores the pre-activation PATH so `off` restores it and re-activating does not stack PATH entries.
+## Auto-activate flow
 
-CMD cannot eval output, so the doskey macro runs `venvctl __shell cmd ...` which writes `venvctl_env.cmd`, then `call`s it. For non-hook commands in CMD, `__shell cmd` runs the normal command itself.
+```
+before each prompt (prompt wrapper | Set-PoshContext | Invoke-Starship-PreCommand | PROMPT_COMMAND | clink.onbeginedit)
+  same folder?                    -> return                     (string compare)
+  root = FindRoot(cwd)            12 levels, stop at .git, closest .venv/venv, else pyproject.toml
+  same root?                      -> return
+  trusted root (trust.json substring) or _VENVCTL_AUTO=1?
+    -> venvctl.exe __shell <sh> auto <root>
+         trusted venv, nothing active        -> activate + _VENVCTL_AUTO=1
+         someone else's venv active          -> nothing
+         auto venv active, root left/denied  -> deactivate
+  untrusted root with a venv      -> one-time hint per session
+```
 
 ## Resolution order (`envmgr.Resolve`)
 
-1. No argument: walk up from cwd for `.venv` or `venv`.
-2. Argument is a venv directory.
-3. Argument is a name under the central dir.
-4. Argument matches a registered name. Ambiguous matches are an error.
+1. No argument: walk up for `.venv` (folder or redirect file) or `venv`.
+2. A venv folder or a redirect file.
+3. A name under the central folder.
+4. A registered name. Several hits return an `AmbiguousError`, which becomes a picker or the exact commands to run.
 
-A `.venv` that is a file is a PEP 832 redirect: its one line is the venv path, relative to the file's folder.
+Entries built from disk are merged with registry data (project, last use, size).
 
 ## Nuke flow
 
 ```
-resolve -> Restart Manager on Scripts/*.exe, *.dll, *.pyd -> table: PID, name, parent, exe
-  editor/shell in list -> refuse, user closes it
-  else --force or [y/N] -> TerminateProcess each
--> rename dir to *.venvctl-trash (fails = still locked, nothing touched)
--> RemoveAll trash with backoff -> unregister
+resolve all targets → lockers (RM) → refuse editors/shells → --force | [y/N] | refuse
+→ rename to <dir>.<ns>.venvctl-trash (fails = untouched) → RemoveAll with backoff
+→ sweep old *.venvctl-trash / *.pygo-trash / *.wv-trash siblings → unregister
 ```
 
-## Repair flow
+`prune` selects by age, size or status, and runs each venv through the same path.
 
-Old path comes from `activate.bat`. Every file in `Scripts\` is rewritten: uv launchers (`UVSC`/`UVPY`/`UVUV` trailer) get their length-prefixed path replaced, everything else a byte replace in both slash forms. `--dry-run` lists files only.
+## Init flow
+
+`init` updates each PowerShell profile, `.bashrc` and the CMD AutoRun value:
+- It filters out WinVenv, pyGo and stale venvctl hooks. The filtering is pure and tested on strings.
+- It keeps everything else, including the file's encoding, its line endings and VS Code's segments.
+- It adds the venvctl hook, or keeps an existing one in place.
+
+`--dry-run` only reports. `--remove` uninstalls.
 
 ## Doctor checks
 
-python on PATH (Store stub first?), App Execution Alias stubs (reparse tag `0x8000001B`), PEP 514 interpreters, ExecutionPolicy with the deciding scope, `LongPathsEnabled`, `vcruntime140.dll`, `uv`, shell hooks installed, venvs inside OneDrive/Dropbox/Google Drive.
+- python on PATH
+- Store alias
+- PEP 514 interpreters
+- ExecutionPolicy, naming the deciding scope
+- LongPathsEnabled
+- VC++ runtime
+- uv
+- venvctl hooks, including stale and removed hooks
+- legacy hooks, per shell
+- CMD hook removed by VS Code
+- old state folders
+- cloud-synced venvs
+- IDE discovery of central envs
 
-## Out of scope for now
+## Out of scope
 
-Python version installs, lockfiles, dependency management (that is uv's job), Linux/macOS.
+Installing Pythons, lockfiles and dependencies (that's uv's job), Linux and macOS, junctions, and editing editor settings.
