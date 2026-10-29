@@ -16,7 +16,7 @@ func TestRewritePath(t *testing.T) {
 		t.Fatalf("pip launcher not rewritten: %q", got)
 	}
 
-	// uv trampoline: <path><u32 len>UVUV; length must be fixed up.
+	// uv trampoline: <path><u32 len>UVSC; length must be fixed up.
 	path := []byte(old + `\Scripts\python.exe`)
 	uv := append([]byte("MZ...stub..."), path...)
 	uv = binary.LittleEndian.AppendUint32(uv, uint32(len(path)))
@@ -33,5 +33,32 @@ func TestRewritePath(t *testing.T) {
 	sh := []byte("VIRTUAL_ENV='C:/old/.venv'")
 	if got := RewritePath(sh, old, new); string(got) != "VIRTUAL_ENV='D:/proj/renamed/.venv'" {
 		t.Fatalf("slash form not rewritten: %q", got)
+	}
+}
+
+func TestRewritePathBoundary(t *testing.T) {
+	old, new := `C:\x\proj`, `D:\moved\proj`
+	in := `set "VIRTUAL_ENV=C:\x\proj"` + "\r\n" + // quote boundary
+		`#!C:\x\proj\Scripts\python.exe` + "\r\n" + // backslash boundary
+		`C:\x\proj2\Scripts\python.exe` + "\n" + // proj2: must not change
+		`PATH=C:\x\proj;C:\x\projects` + "\n" + // semicolon boundary; projects untouched
+		`home = C:\x\proj` + "\n" + // end of line
+		`VIRTUAL_ENV='C:/x/proj' (C:/x/proj) C:/x/proj` // slash form: quote, paren, end of data
+	want := `set "VIRTUAL_ENV=D:\moved\proj"` + "\r\n" +
+		`#!D:\moved\proj\Scripts\python.exe` + "\r\n" +
+		`C:\x\proj2\Scripts\python.exe` + "\n" +
+		`PATH=D:\moved\proj;C:\x\projects` + "\n" +
+		`home = D:\moved\proj` + "\n" +
+		`VIRTUAL_ENV='D:/moved/proj' (D:/moved/proj) D:/moved/proj`
+	if got := string(RewritePath([]byte(in), old, new)); got != want {
+		t.Fatalf("boundary rewrite wrong\n got: %q\nwant: %q", got, want)
+	}
+
+	// uv trailer holding the over-match case must stay byte-identical.
+	path := []byte(`C:\x\proj2\Scripts\python.exe`)
+	uv := binary.LittleEndian.AppendUint32(append([]byte("MZ"), path...), uint32(len(path)))
+	uv = append(uv, "UVSC"...)
+	if got := RewritePath(uv, old, new); !bytes.Equal(got, uv) {
+		t.Fatalf("uv trailer for proj2 was rewritten: %q", got)
 	}
 }

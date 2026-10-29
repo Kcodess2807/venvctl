@@ -198,7 +198,7 @@ func scanCmd() *cobra.Command {
 			if len(roots) == 0 {
 				roots = discovery.FixedDrives()
 			}
-			roots = append(roots, envmgr.CentralDir()) // AppData is skipped during the walk
+			roots = dedupeRoots(append(roots, envmgr.CentralDir())) // AppData is skipped during the walk
 			fmt.Fprintln(os.Stderr, dim.Render("scanning "+strings.Join(roots, " ")))
 			start := time.Now()
 			found := discovery.Scan(roots)
@@ -237,6 +237,23 @@ func scanCmd() *cobra.Command {
 	}
 }
 
+// dedupeRoots makes roots absolute and drops repeats, comparing case-insensitively.
+func dedupeRoots(roots []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range roots {
+		abs, err := filepath.Abs(r)
+		if err != nil {
+			abs = r
+		}
+		if k := strings.ToLower(filepath.Clean(abs)); !seen[k] {
+			seen[k] = true
+			out = append(out, abs)
+		}
+	}
+	return out
+}
+
 func nukeCmd() *cobra.Command {
 	var force bool
 	c := &cobra.Command{
@@ -252,7 +269,7 @@ func nukeCmd() *cobra.Command {
 				}
 			}()
 			for _, arg := range args {
-				e, err := envmgr.Resolve(reg, arg)
+				e, err := resolve(reg, arg, "nuke")
 				if err != nil {
 					return err
 				}
@@ -319,6 +336,42 @@ func killLockers(dir string, lockers []winapi.Locker, force bool) error {
 	return nil
 }
 
+// resolve wraps envmgr.Resolve for command verb. When several venvs share the name it lists
+// them on stderr and asks which one; without a console it fails with the exact commands to run.
+func resolve(reg *envmgr.Registry, arg, verb string) (envmgr.Entry, error) {
+	e, err := envmgr.Resolve(reg, arg)
+	var amb *envmgr.AmbiguousError
+	var nf *envmgr.NotFoundError
+	switch {
+	case errors.Is(err, envmgr.ErrNoLocalVenv):
+		return e, fmt.Errorf("%w; cd into a project, or pass a name or path (see `pygo list`)", err)
+	case errors.As(err, &nf):
+		return e, fmt.Errorf("%w; run `pygo list` to see names, or `pygo scan` to find new venvs", err)
+	case !errors.As(err, &amb):
+		return e, err
+	}
+	tw := tabwriter.NewWriter(os.Stderr, 0, 2, 2, ' ', 0)
+	fmt.Fprintf(os.Stderr, "%q matches %d environments:\n", amb.Name, len(amb.Hits))
+	fmt.Fprintln(tw, bold.Render("#\tNAME\tPYTHON\tLAST USED\tPATH"))
+	for i, h := range amb.Hits {
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", i+1, h.Name, h.Version, age(h.LastUsed), h.Path)
+	}
+	tw.Flush()
+	if interactive() {
+		fmt.Fprintf(os.Stderr, "which one? [1-%d] ", len(amb.Hits))
+		var n int
+		if _, err := fmt.Fscanln(os.Stdin, &n); err == nil && n >= 1 && n <= len(amb.Hits) {
+			return amb.Hits[n-1], nil
+		}
+		return envmgr.Entry{}, errors.New("no valid choice, nothing done; rerun and pick a number, or pass the path")
+	}
+	var cmds []string
+	for _, h := range amb.Hits {
+		cmds = append(cmds, fmt.Sprintf(`pygo %s "%s"`, verb, h.Path))
+	}
+	return envmgr.Entry{}, fmt.Errorf("%w; pick one by path:\n  %s", amb, strings.Join(cmds, "\n  "))
+}
+
 // interactive reports whether stdin is a console a person can answer on.
 func interactive() bool {
 	var mode uint32
@@ -337,7 +390,7 @@ func repairCmd() *cobra.Command {
 				target = args[0]
 			}
 			reg := envmgr.LoadRegistry()
-			e, err := envmgr.Resolve(reg, target)
+			e, err := resolve(reg, target, "repair")
 			if err != nil {
 				return err
 			}
@@ -378,7 +431,7 @@ func doctorCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			fails := 0
-			for _, c := range doctor.Run() {
+			for _, c := range doctor.Run(exePath()) {
 				mark := okMark
 				switch {
 				case c.Warn:
@@ -445,7 +498,7 @@ func hookScript(sh string, args []string) (script string, handled bool, err erro
 	case "off", "deactivate":
 		return shell.Deactivate(sh), true, nil
 	case "cd":
-		e, err := envmgr.Resolve(reg, target)
+		e, err := resolve(reg, target, "cd")
 		if err != nil {
 			return "", true, err
 		}
@@ -455,7 +508,7 @@ func hookScript(sh string, args []string) (script string, handled bool, err erro
 		}
 		return shell.Cd(sh, dir), true, nil
 	default:
-		e, err := envmgr.Resolve(reg, target)
+		e, err := resolve(reg, target, "on")
 		if err != nil {
 			return "", true, err
 		}

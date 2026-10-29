@@ -141,6 +141,9 @@ func readRedirect(p string) (string, bool) {
 	return filepath.Clean(line), true
 }
 
+// ErrNoLocalVenv: Resolve("") found no .venv or venv walking up from the current folder.
+var ErrNoLocalVenv = errors.New("no .venv or venv in this folder or any parent")
+
 // Resolve picks a venv: "" walks up from cwd for .venv/venv; otherwise a directory, a central
 // env name, or a registered name.
 func Resolve(r *Registry, arg string) (Entry, error) {
@@ -158,7 +161,7 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 			}
 			dir = parent
 		}
-		return Entry{}, errors.New("no .venv in this directory or its parents; pass a name or path")
+		return Entry{}, ErrNoLocalVenv
 	}
 	if e, ok := FromDir(arg); ok {
 		return e, nil
@@ -174,11 +177,28 @@ func Resolve(r *Registry, arg string) (Entry, error) {
 	}
 	switch len(hits) {
 	case 0:
-		return Entry{}, fmt.Errorf("%q is neither a directory nor a known environment (try `pygo scan`)", arg)
+		return Entry{}, &NotFoundError{Arg: arg}
 	case 1:
 		return hits[0], nil
 	}
-	return Entry{}, fmt.Errorf("%q matches %d environments; pass a path instead", arg, len(hits))
+	return Entry{}, &AmbiguousError{Name: arg, Hits: hits}
+}
+
+// NotFoundError: the argument is neither a venv folder nor a known name.
+type NotFoundError struct{ Arg string }
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("%q is neither a venv folder nor a registered environment", e.Arg)
+}
+
+// AmbiguousError: several registered venvs share the name; the caller picks one.
+type AmbiguousError struct {
+	Name string
+	Hits []Entry
+}
+
+func (e *AmbiguousError) Error() string {
+	return fmt.Sprintf("%q matches %d environments", e.Name, len(e.Hits))
 }
 
 // Create makes a venv with `uv venv` when available, else `python -m venv`.
@@ -324,15 +344,42 @@ func RewritePath(b []byte, old, new string) []byte {
 	if n > 8 && isUvMagic(b[n-4:]) {
 		l := int(binary.LittleEndian.Uint32(b[n-8 : n-4]))
 		if start := n - 8 - l; start >= 0 {
-			path := bytes.ReplaceAll(b[start:n-8], []byte(old), []byte(new))
+			path := replaceBounded(b[start:n-8], []byte(old), []byte(new))
 			out := append([]byte{}, b[:start]...)
 			out = append(out, path...)
 			out = binary.LittleEndian.AppendUint32(out, uint32(len(path)))
 			return append(out, b[n-4:]...)
 		}
 	}
-	nb := bytes.ReplaceAll(b, []byte(old), []byte(new))
-	return bytes.ReplaceAll(nb, []byte(filepath.ToSlash(old)), []byte(filepath.ToSlash(new)))
+	nb := replaceBounded(b, []byte(old), []byte(new))
+	return replaceBounded(nb, []byte(filepath.ToSlash(old)), []byte(filepath.ToSlash(new)))
+}
+
+// pathBoundary are the bytes that may follow a path for it to count as a whole-path match.
+const pathBoundary = `\/"');` + " \t\r\n"
+
+// replaceBounded replaces old with new only where old ends at a path boundary: followed by
+// a pathBoundary byte or the end of data. So C:\x\proj never rewrites C:\x\proj2.
+func replaceBounded(b, old, new []byte) []byte {
+	if len(old) == 0 || !bytes.Contains(b, old) {
+		return b
+	}
+	var out []byte
+	i := 0
+	for {
+		j := bytes.Index(b[i:], old)
+		if j < 0 {
+			break
+		}
+		end := i + j + len(old)
+		if end == len(b) || strings.IndexByte(pathBoundary, b[end]) >= 0 {
+			out = append(append(out, b[i:i+j]...), new...)
+		} else {
+			out = append(out, b[i:end]...)
+		}
+		i = end
+	}
+	return append(out, b[i:]...)
 }
 
 func isUvMagic(m []byte) bool {

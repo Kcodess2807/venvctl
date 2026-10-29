@@ -25,7 +25,8 @@ type Check struct {
 	Fix    string
 }
 
-func Run() []Check {
+// Run executes every check. exe is the running pygo.exe, which hooks must point at.
+func Run(exe string) []Check {
 	return []Check{
 		pythonOnPath(),
 		storeAlias(),
@@ -34,7 +35,7 @@ func Run() []Check {
 		longPaths(),
 		vcRuntime(),
 		uv(),
-		hooks(),
+		hooks(exe),
 		cloudVenvs(),
 	}
 }
@@ -226,41 +227,35 @@ func uv() Check {
 	return c
 }
 
-func hooks() Check {
-	c := Check{Name: "pygo shell hooks"}
-	var have, missing []string
-	for _, ps := range []string{"pwsh", "powershell"} {
-		if _, err := exec.LookPath(ps); err != nil {
-			continue
-		}
-		out, err := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", "$PROFILE").Output()
-		if err != nil {
-			continue
-		}
-		if b, _ := os.ReadFile(strings.TrimSpace(string(out))); strings.Contains(string(b), "init pwsh") {
-			have = append(have, ps)
-		} else {
-			missing = append(missing, ps)
-		}
-	}
-	if strings.Contains(shell.AutoRun(), "pygo_hook.cmd") {
-		have = append(have, "cmd")
-	} else {
-		missing = append(missing, "cmd")
-	}
-	if _, err := exec.LookPath("bash"); err == nil {
-		if b, _ := os.ReadFile(filepath.Join(os.Getenv("USERPROFILE"), ".bashrc")); strings.Contains(string(b), "init bash") {
-			have = append(have, "bash")
-		} else {
-			missing = append(missing, "bash")
+// hooks checks every shell's hook against exe, the running pygo.exe.
+func hooks(exe string) Check {
+	c := Check{Name: "pygo shell hooks", OK: true}
+	var have, problems []string
+	fix := ""
+	for _, h := range shell.Status(exe) {
+		switch h.State {
+		case "ok":
+			have = append(have, h.Shell)
+		case "stale":
+			problems = append(problems, fmt.Sprintf("%s: stale hook (%s)", h.Shell, h.Detail))
+			fix = "run `pygo init` to point the hooks at " + exe + ", then restart the shell"
+		case "removed":
+			problems = append(problems, "cmd: pyGo CMD hook removed ("+h.Detail+")")
+			if fix == "" {
+				fix = "run `pygo init cmd`"
+			}
+		default:
+			problems = append(problems, h.Shell+": missing")
+			if fix == "" {
+				fix = "run `pygo init` and restart the shell"
+			}
 		}
 	}
-	c.OK = len(missing) == 0
 	c.Detail = "installed: " + orNone(have)
-	if !c.OK {
+	if len(problems) > 0 {
 		c.Warn = true
-		c.Detail += "; missing: " + strings.Join(missing, ", ")
-		c.Fix = "run `pygo init` and restart the shell"
+		c.Detail += "; " + strings.Join(problems, "; ")
+		c.Fix = fix
 	}
 	return c
 }

@@ -9,8 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -145,17 +148,8 @@ func Install(exe string) ([]string, error) {
 	var done []string
 	var errs []error
 
-	// PowerShell 7 and Windows PowerShell 5.1 have different $PROFILE paths; ask each.
-	for _, ps := range []string{"pwsh", "powershell"} {
-		if _, err := exec.LookPath(ps); err != nil {
-			continue
-		}
-		out, err := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", "$PROFILE").Output()
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", ps, err))
-			continue
-		}
-		profile := strings.TrimSpace(string(out))
+	for _, ps := range PowerShells() {
+		profile := Profiles()[ps]
 		line := fmt.Sprintf("& '%s' init pwsh | Out-String | Invoke-Expression", psq(exe))
 		if err := appendOnce(profile, line, "\r\n"); err != nil {
 			errs = append(errs, err)
@@ -165,7 +159,7 @@ func Install(exe string) ([]string, error) {
 	}
 
 	// CMD: doskey macro defined by a hook file that HKCU Command Processor\AutoRun calls.
-	hook := filepath.Join(hookDir(), "pygo_hook.cmd")
+	hook := hookFile()
 	script, _ := Init("cmd", exe)
 	os.MkdirAll(hookDir(), 0o755)
 	if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
@@ -229,6 +223,99 @@ func setAutoRun(call string) error {
 	return k.SetStringValue("AutoRun", call)
 }
 
+// Profiles maps each installed PowerShell ("powershell" = 5.1, "pwsh" = 7) to its
+// CurrentUserCurrentHost profile path, the file $PROFILE names in a console. It reads the
+// Documents known folder instead of spawning PowerShell, which also follows OneDrive redirection.
+func Profiles() map[string]string {
+	docs, err := windows.KnownFolderPath(windows.FOLDERID_Documents, 0)
+	if err != nil {
+		docs = filepath.Join(os.Getenv("USERPROFILE"), "Documents")
+	}
+	m := map[string]string{}
+	if _, err := exec.LookPath("powershell"); err == nil {
+		m["powershell"] = filepath.Join(docs, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
+	}
+	if _, err := exec.LookPath("pwsh"); err == nil {
+		m["pwsh"] = filepath.Join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1")
+	}
+	return m
+}
+
+// PowerShells returns the installed PowerShell names from Profiles, sorted.
+func PowerShells() []string {
+	var names []string
+	for k := range Profiles() {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func hookFile() string { return filepath.Join(hookDir(), "pygo_hook.cmd") }
+
+// Hook is the install state of one shell's hook.
+type Hook struct {
+	Shell  string // powershell, pwsh, cmd, bash
+	State  string // ok, missing, stale, removed
+	Detail string // file or key, and for stale the exe the hook points at
+}
+
+var (
+	rePwshHook = regexp.MustCompile(`(?i)'([^']+\.exe)'\s+init\s+pwsh`)
+	reBashHook = regexp.MustCompile(`(?i)'([^']+)'\s+init\s+bash`)
+	reCmdHook  = regexp.MustCompile(`(?i)doskey\s+pygo="([^"]+)"`)
+)
+
+// Status inspects every shell's hook and compares the exe it calls with exe (the running pygo).
+// A hook calling anything else (an old wv.exe, a moved pygo.exe) is "stale".
+func Status(exe string) []Hook {
+	var out []Hook
+	for _, ps := range PowerShells() {
+		profile := Profiles()[ps]
+		b, _ := os.ReadFile(profile)
+		out = append(out, judge(ps, profile, rePwshHook.FindAllStringSubmatch(string(b), -1), exe))
+	}
+
+	ar := AutoRun()
+	switch {
+	case strings.Contains(strings.ToLower(ar), strings.ToLower(hookFile())):
+		b, _ := os.ReadFile(hookFile())
+		out = append(out, judge("cmd", hookFile(), reCmdHook.FindAllStringSubmatch(string(b), -1), exe))
+	case fileExists(hookFile()):
+		out = append(out, Hook{"cmd", "removed", "AutoRun no longer calls " + hookFile() + " (rewritten, probably by VS Code)"})
+	case strings.Contains(strings.ToLower(ar), "hook.cmd"):
+		out = append(out, Hook{"cmd", "stale", "AutoRun calls another hook: " + ar})
+	default:
+		out = append(out, Hook{"cmd", "missing", `HKCU\Software\Microsoft\Command Processor\AutoRun`})
+	}
+
+	if _, err := exec.LookPath("bash"); err == nil {
+		rc := filepath.Join(os.Getenv("USERPROFILE"), ".bashrc")
+		b, _ := os.ReadFile(rc)
+		h := judge("bash", rc, reBashHook.FindAllStringSubmatch(string(b), -1), posixPath(exe))
+		out = append(out, h)
+	}
+	return out
+}
+
+// judge picks ok if any hook line calls want, stale if lines exist but call something else.
+func judge(sh, where string, matches [][]string, want string) Hook {
+	if len(matches) == 0 {
+		return Hook{sh, "missing", where}
+	}
+	for _, m := range matches {
+		if strings.EqualFold(strings.ReplaceAll(m[1], "''", "'"), want) {
+			return Hook{sh, "ok", where}
+		}
+	}
+	return Hook{sh, "stale", fmt.Sprintf("%s points at %s", where, matches[0][1])}
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
 // AutoRun returns the current HKCU Command Processor AutoRun value.
 func AutoRun() string {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Command Processor`, registry.QUERY_VALUE)
@@ -244,10 +331,13 @@ func AutoRun() string {
 func psq(s string) string { return strings.ReplaceAll(s, "'", "''") }
 
 // posix converts C:\a\b to /c/a/b for Git Bash.
-func posix(p string) string {
+func posix(p string) string { return strings.ReplaceAll(posixPath(p), "'", `'\''`) }
+
+// posixPath converts C:\a\b to /c/a/b without shell quoting.
+func posixPath(p string) string {
 	p = filepath.ToSlash(p)
 	if len(p) > 1 && p[1] == ':' {
 		p = "/" + strings.ToLower(p[:1]) + p[2:]
 	}
-	return strings.ReplaceAll(p, "'", `'\''`)
+	return p
 }
