@@ -70,7 +70,8 @@ earlier WinVenv (wv) and pyGo (pygo) versions, then adds the venvctl hook. Other
 other AutoRun commands (such as VS Code's) are kept as they are.
 
 "venvctl init pwsh" and "venvctl init bash" print the hook code that those profile lines evaluate;
-add --install to update just that shell. CMD cannot evaluate code, so "venvctl init cmd" installs.`,
+add --install to update just that shell. CMD cannot evaluate code, so "venvctl init cmd" installs.
+With auto-activate on and Clink installed, init cmd also writes a Clink script: experimental (untested).`,
 		Example: `  venvctl init --dry-run
   venvctl init
   venvctl init --remove
@@ -247,7 +248,8 @@ func configCmd() *cobra.Command {
 		GroupID: "setup",
 		Short:   "Show or change settings (auto-activate on|off)",
 		Long: `Without arguments prints the settings in config.json. Keys you can set:
-  auto-activate on|off   activate trusted projects' venvs on cd (new terminals pick it up)`,
+  auto-activate on|off   activate trusted projects' venvs on cd (new terminals pick it up);
+                         PowerShell and Git Bash; CMD only with Clink, experimental (untested)`,
 		Example: `  venvctl config
   venvctl config auto-activate on
   venvctl --json config`,
@@ -291,7 +293,7 @@ func configCmd() *cobra.Command {
 			if on {
 				say("%s auto-activate on: open a new terminal; trusted roots (`venvctl allow`) activate on cd", okMark())
 				if shell.HasClink() {
-					say(dim("for CMD run `venvctl init cmd` once to install the Clink script"))
+					say(dim("CMD auto-activate via Clink is experimental (untested): run `venvctl init cmd` once to install it"))
 				}
 			} else {
 				say("%s auto-activate off for new terminals", okMark())

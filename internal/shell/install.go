@@ -363,11 +363,11 @@ func clinkNote(c *Change, exe string, o Options) {
 			}
 		}
 	case !HasClink():
-		c.Notes = append(c.Notes, "auto-activate in CMD needs Clink (not found), skipped")
+		c.Notes = append(c.Notes, "auto-activate in CMD needs Clink (not found), skipped; Clink support is experimental (untested)")
 	default:
 		want := clinkLua(exe)
 		if string(old) != want {
-			c.Notes = append(c.Notes, "wrote Clink auto-activate script "+p)
+			c.Notes = append(c.Notes, "wrote Clink auto-activate script (experimental, untested) "+p)
 			c.Changed = true
 			if !o.DryRun {
 				os.MkdirAll(filepath.Dir(p), 0o755)
