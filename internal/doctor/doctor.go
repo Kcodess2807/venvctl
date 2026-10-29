@@ -23,17 +23,20 @@ type Check struct {
 	Name   string
 	OK     bool
 	Warn   bool // not a failure, but worth knowing
+	Info   bool // informational only: nothing to fix right now
 	Detail string
 	Fix    string
 }
 
-// Status is "ok", "warn" or "fail". Warn wins over OK=false.
+// Status is "ok", "info", "warn" or "fail". Warn wins over OK=false.
 func (c Check) Status() string {
 	switch {
 	case c.Warn:
 		return "warn"
 	case !c.OK:
 		return "fail"
+	case c.Info:
+		return "info"
 	}
 	return "ok"
 }
@@ -42,7 +45,6 @@ func (c Check) Status() string {
 func Run(exe string) []Check {
 	checks := []Check{
 		pythonOnPath(),
-		storeAlias(),
 		interpreters(),
 		execPolicy(),
 		longPaths(),
@@ -223,40 +225,95 @@ func pythonsOnPath() []string {
 	return out
 }
 
+// aliasOwners classifies App Execution Aliases by the package that owns them. Verified against:
+// PyManager's own check (python/pymanager src/manage/firstrun.py, check_app_alias, which expects
+// PythonSoftwareFoundation.PythonManager_* identities); a Store CPython install
+// (PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0); and this machine's App Installer stub
+// (Microsoft.DesktopAppInstaller_8wekyb3d8bbwe, target AppInstallerPythonRedirector.exe).
+var aliasOwners = []struct{ prefix, kind, label string }{
+	{"Microsoft.DesktopAppInstaller_", "stub", "the Microsoft Store redirector (App Installer)"},
+	{"PythonSoftwareFoundation.PythonManager_", "python", "the Python install manager (PyManager)"},
+	{"PythonSoftwareFoundation.Python.", "python", "a Microsoft Store CPython"},
+}
+
+const stubTarget = `\appinstallerpythonredirector.exe`
+
+// classifyAlias reads a WindowsApps alias: kind is "stub", "python", "unknown", or "" when the file
+// is not an App Execution Alias.
+func classifyAlias(p string) (kind, label string, l winapi.AppExecLink) {
+	l, err := winapi.ReadAppExecLink(p)
+	if err != nil {
+		return "", "", l
+	}
+	kind, label = classifyLink(l)
+	return kind, label, l
+}
+
+// classifyLink is classifyAlias's pure part, from the alias's package and target.
+func classifyLink(l winapi.AppExecLink) (kind, label string) {
+	if strings.HasSuffix(strings.ToLower(l.Target), stubTarget) {
+		return "stub", aliasOwners[0].label
+	}
+	for _, o := range aliasOwners {
+		if strings.HasPrefix(l.Package, o.prefix) {
+			return o.kind, o.label
+		}
+	}
+	return "unknown", "an unrecognised alias (package " + l.Package + ")"
+}
+
+// pyManagerInstalled: PyManager owns the pymanager.exe (and py/python when enabled) aliases.
+// Detected from the aliases only; venvctl never runs py.exe to find out.
+func pyManagerInstalled() bool {
+	for _, n := range []string{"pymanager.exe", "py.exe", "python.exe"} {
+		if _, _, l := classifyAlias(filepath.Join(windowsApps(), n)); strings.HasPrefix(l.Package, aliasOwners[1].prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// pythonOnPath reports what `python` runs, including what a WindowsApps alias really is:
+// the Store redirector fails, a PyManager or Store CPython alias passes.
 func pythonOnPath() Check {
 	ps := pythonsOnPath()
-	c := Check{Name: "python on PATH"}
+	c := Check{Name: "python on PATH", OK: true}
+	fix := `Settings > Apps > Advanced app settings > App execution aliases: turn off the "App Installer" python.exe and python3.exe, or install Python from python.org (the Python install manager), whose aliases run a real Python`
+	if pyManagerInstalled() {
+		fix = "run `py install --configure` (PyManager repairs its aliases)"
+	}
 	switch {
 	case len(ps) == 0:
-		c.Warn, c.Detail, c.Fix = true, "no python.exe on PATH", "install Python (python.org or `uv python install`) or use `venvctl create` which finds installs via the registry"
+		c.Warn, c.Detail = true, "no python.exe on PATH"
+		c.Fix = "install Python (python.org or `uv python install`); `venvctl create` also finds installs via the registry"
 	case strings.EqualFold(filepath.Dir(ps[0]), windowsApps()):
-		c.Detail = "`python` resolves to the Microsoft Store stub: " + ps[0]
-		c.Fix = "Settings > Apps > Advanced app settings > App execution aliases: turn off python.exe and python3.exe, or install Python and move it ahead of WindowsApps in PATH"
+		kind, label, l := classifyAlias(ps[0])
+		switch kind {
+		case "stub":
+			c.OK = false
+			c.Detail = "`python` is " + label + ", which opens the Microsoft Store instead of running Python"
+			c.Fix = fix
+		case "python":
+			c.Detail = "`python` is the alias of " + label + ": " + l.Target
+		case "unknown":
+			c.Warn = true
+			c.Detail = "`python` is " + label + ": " + l.Target
+			c.Fix = "check Settings > Apps > Advanced app settings > App execution aliases"
+		default:
+			c.Detail = ps[0]
+		}
 	default:
-		c.OK = true
 		c.Detail = ps[0]
 		if len(ps) > 1 {
 			c.Detail += fmt.Sprintf(" (+%d more later in PATH)", len(ps)-1)
 		}
-	}
-	return c
-}
-
-func storeAlias() Check {
-	c := Check{Name: "Store app execution alias", OK: true}
-	var stubs []string
-	for _, n := range []string{"python.exe", "python3.exe"} {
-		if p := filepath.Join(windowsApps(), n); winapi.IsAppExecAlias(p) {
-			stubs = append(stubs, n)
+		for _, n := range []string{"python.exe", "python3.exe"} {
+			if k, _, _ := classifyAlias(filepath.Join(windowsApps(), n)); k == "stub" {
+				c.Detail += "; Store redirector aliases in WindowsApps are shadowed (harmless)"
+				break
+			}
 		}
 	}
-	if len(stubs) == 0 {
-		c.Detail = "no python stubs in WindowsApps"
-		return c
-	}
-	c.Warn = true
-	c.Detail = strings.Join(stubs, ", ") + " stubs present in " + windowsApps()
-	c.Fix = "harmless while a real Python precedes WindowsApps in PATH; disable them under App execution aliases to be safe"
 	return c
 }
 
@@ -354,8 +411,17 @@ func longPaths() Check {
 			return c
 		}
 	}
-	c.Warn, c.Detail = true, "disabled; deep site-packages trees can exceed 260 chars"
 	c.Fix = `admin: reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f`
+	if pyManagerInstalled() {
+		c.Fix = "run `py install --configure` (it offers to enable long paths)"
+	}
+	if envmgr.UvAtLeast(0, 12, 14) {
+		// uv 0.12.14+ installs packages past MAX_PATH by itself; pip and other tools may still fail.
+		c.OK, c.Info = true, true
+		c.Detail = "disabled; uv handles long paths itself (0.12.14+), but pip and some tools can still fail on deep paths"
+		return c
+	}
+	c.Warn, c.Detail = true, "disabled; deep site-packages trees can exceed 260 chars"
 	return c
 }
 

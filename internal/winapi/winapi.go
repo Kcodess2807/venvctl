@@ -192,18 +192,3 @@ func Kill(pid uint32) error {
 	defer windows.CloseHandle(h)
 	return windows.TerminateProcess(h, 1)
 }
-
-// IsAppExecAlias reports whether path is a Microsoft Store app execution alias stub.
-func IsAppExecAlias(path string) bool {
-	p, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return false
-	}
-	var fd windows.Win32finddata
-	h, err := windows.FindFirstFile(p, &fd)
-	if err != nil {
-		return false
-	}
-	windows.FindClose(h)
-	return fd.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 && fd.Reserved0 == ioReparseTagAppExecLink
-}
