@@ -812,6 +812,156 @@ func killLockers(dir string, lockers []winapi.Locker, force bool) error {
 	return nil
 }
 
+// ---- prune ----
+
+func pruneCmd() *cobra.Command {
+	var f filters
+	var missing, broken, central, local, dry, yes bool
+	c := &cobra.Command{
+		Use:     "prune",
+		GroupID: "maintain",
+		Short:   "Delete many venvs at once: old, big, missing or broken ones",
+		Long: "Selects venvs matching ALL given criteria (--missing and --broken together mean either),\n" +
+			"shows them with sizes and a total, then asks once before deleting. Each deletion goes through\n" +
+			"the same path as `pygo nuke`: lock detection, editor protection, rename-first delete.\n" +
+			"Refused venvs are skipped and listed at the end. The active venv is never pruned.\n" +
+			"--missing entries are only unregistered; their folders are already gone.",
+		Example: `  pygo prune --older-than 180d --dry-run
+  pygo prune --min-size 1GB --older-than 90d
+  pygo prune --missing --yes
+  pygo --json prune --broken --local --yes`,
+		Args: nargs(cobra.NoArgs),
+		RunE: func(*cobra.Command, []string) error {
+			if central && local {
+				return Fail(exitUsage, "--central and --local exclude each other", "pick one, or neither for both kinds")
+			}
+			if !missing && !broken && f.olderThan == "" && f.minSize == "" {
+				return Fail(exitUsage, "prune needs at least one criterion",
+					"add --older-than, --min-size, --missing or --broken (see `pygo prune --help`)")
+			}
+			if central {
+				f.filter = "central"
+			} else if local {
+				f.filter = "local"
+			}
+			if err := f.parse(); err != nil {
+				return err
+			}
+			reg := envmgr.LoadRegistry()
+			all := gather(reg.Envs)
+			cacheSizes(reg, all)
+			var picked []row
+			var total int64
+			for _, r := range all {
+				statusOK := (!missing && !broken) || (missing && r.status == "missing") || (broken && r.status == "broken")
+				if statusOK && f.match(r) && !r.active {
+					picked = append(picked, r)
+					total += r.size
+				}
+			}
+			sort.SliceStable(picked, func(i, j int) bool { return picked[i].size > picked[j].size })
+
+			candidates := []rowJSON{}
+			var cells [][]string
+			for _, r := range picked {
+				candidates = append(candidates, r.json())
+				size := human(r.size)
+				if r.status != "ok" {
+					size = r.status + " " + size
+				}
+				last := age(r.activity)
+				if !r.activity.IsZero() && r.LastUsed.IsZero() {
+					last = "~" + last
+				}
+				cells = append(cells, []string{r.Name, size, last, r.Path})
+			}
+			if len(picked) == 0 {
+				if opt.json {
+					emit(pruneJSON{Candidates: candidates, DryRun: dry, Results: []nukeResult{}})
+				}
+				return nothing("no venvs match; nothing to prune")
+			}
+			if !opt.json && !opt.quiet {
+				table(stdout, []string{"NAME", "SIZE", "LAST USED", "PATH"}, cells, 1)
+			}
+			say(dim(fmt.Sprintf("%d venvs, %s", len(picked), human(total))))
+
+			proceed := !dry
+			if proceed && !yes {
+				switch {
+				case !interactive():
+					if opt.json {
+						emit(pruneJSON{Candidates: candidates, TotalBytes: total, DryRun: dry, Results: []nukeResult{}})
+					}
+					return Fail(exitRefused, fmt.Sprintf("%d venvs selected, none deleted", len(picked)), "rerun with --yes to delete them, or --dry-run to only list")
+				case !confirm(fmt.Sprintf("delete %d venvs freeing %s?", len(picked), human(total))):
+					return Fail(exitRefused, "nothing deleted", "rerun when you are sure, or narrow the criteria")
+				}
+			}
+			results := []nukeResult{}
+			code := exitOK
+			var refused []string
+			if proceed {
+				for _, r := range picked {
+					res := nukeOne(reg, r.Entry, false, false)
+					results = append(results, res)
+					if !opt.json {
+						printNuke(res)
+					}
+					if res.err != nil {
+						refused = append(refused, r.Name+" ("+res.Status+")")
+						if res.err.code == exitFail || code == exitOK {
+							code = res.err.code
+						}
+					}
+				}
+				if err := reg.Save(); err != nil {
+					printErr(&exitError{code: exitFail, msg: "could not save the registry: " + err.Error(), fix: "run `pygo scan` to resync it"})
+					code = exitFail
+				}
+			}
+			if opt.json {
+				var freed int64
+				for _, r := range results {
+					freed += r.FreedBytes
+				}
+				if err := emit(pruneJSON{candidates, total, dry, results, freed}); err != nil {
+					return err
+				}
+			} else if proceed {
+				var freed int64
+				for _, r := range results {
+					freed += r.FreedBytes
+				}
+				say(dim(fmt.Sprintf("freed %s from %d of %d venvs", human(freed), len(picked)-len(refused), len(picked))))
+				if len(refused) > 0 {
+					say("%s skipped: %s", warnMark(), strings.Join(refused, ", "))
+				}
+			}
+			return done(code)
+		},
+	}
+	fl := c.Flags()
+	fl.StringVar(&f.olderThan, "older-than", "", "unused for at least this long, like 90d")
+	fl.StringVar(&f.minSize, "min-size", "", "at least this big, like 1GB")
+	fl.BoolVar(&missing, "missing", false, "folder is gone (only unregisters)")
+	fl.BoolVar(&broken, "broken", false, "base Python is gone")
+	fl.BoolVar(&central, "central", false, "only central envs")
+	fl.BoolVar(&local, "local", false, "only project-local envs")
+	fl.BoolVarP(&dry, "dry-run", "n", false, "list candidates, delete nothing")
+	fl.BoolVarP(&yes, "yes", "y", false, "delete without the confirmation prompt")
+	return c
+}
+
+// pruneJSON is the --json shape of `pygo prune` (see docs/json.md).
+type pruneJSON struct {
+	Candidates []rowJSON    `json:"candidates"`
+	TotalBytes int64        `json:"total_bytes"`
+	DryRun     bool         `json:"dry_run"`
+	Results    []nukeResult `json:"results"`
+	FreedBytes int64        `json:"freed_bytes"`
+}
+
 // ---- repair ----
 
 func repairCmd() *cobra.Command {

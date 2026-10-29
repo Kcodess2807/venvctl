@@ -166,3 +166,56 @@ func TestParseSizeAndAge(t *testing.T) {
 		t.Errorf("parseAge(soon) accepted")
 	}
 }
+
+func TestPrune(t *testing.T) {
+	la := t.TempDir()
+	t.Setenv("LOCALAPPDATA", la)
+	work := t.TempDir()
+	good, broken := filepath.Join(work, "good", ".venv"), filepath.Join(work, "broken", ".venv")
+	fakeVenv(t, good, true)
+	fakeVenv(t, broken, false)
+	gone := filepath.Join(work, "gone", ".venv")
+	reg, _ := json.Marshal(map[string]any{"envs": []map[string]any{
+		{"name": "good", "path": good, "python": filepath.Join(filepath.Dir(good), "base")},
+		{"name": "broken", "path": broken, "python": filepath.Join(filepath.Dir(broken), "base")},
+		{"name": "gone", "path": gone},
+	}})
+	os.MkdirAll(filepath.Join(la, "pygo"), 0o755)
+	os.WriteFile(filepath.Join(la, "pygo", "registry.json"), reg, 0o644)
+
+	run := func(args ...string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code := Run(args, &out, &errOut, strings.NewReader(""))
+		return code, out.String(), errOut.String()
+	}
+	steps := []struct {
+		args []string
+		code int
+		want string // substring of stdout+stderr
+	}{
+		{[]string{"prune"}, 2, "at least one criterion"},
+		{[]string{"prune", "--missing", "--central", "--local"}, 2, "exclude each other"},
+		{[]string{"prune", "--min-size", "1TB"}, 4, "nothing to prune"},
+		{[]string{"prune", "--missing", "--dry-run"}, 0, "gone"},
+		{[]string{"prune", "--missing"}, 3, "rerun with --yes"}, // no console, no --yes
+		{[]string{"prune", "--missing", "--yes"}, 0, "already gone"},
+		{[]string{"prune", "--missing", "--dry-run"}, 4, "nothing to prune"}, // gone was unregistered
+	}
+	for _, s := range steps {
+		code, out, errOut := run(s.args...)
+		if code != s.code || !strings.Contains(out+errOut, s.want) {
+			t.Fatalf("%v: exit %d (want %d), missing %q\nstdout: %s\nstderr: %s", s.args, code, s.code, s.want, out, errOut)
+		}
+	}
+	code, out, _ := run("--json", "prune", "--broken", "--yes")
+	var res pruneJSON
+	if code != 0 || json.Unmarshal([]byte(out), &res) != nil || len(res.Results) != 1 || res.Results[0].Status != "deleted" {
+		t.Fatalf("--json prune --broken --yes: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(broken); !os.IsNotExist(err) {
+		t.Errorf("broken venv still on disk")
+	}
+	if _, err := os.Stat(good); err != nil {
+		t.Errorf("good venv was touched: %v", err)
+	}
+}
