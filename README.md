@@ -1,154 +1,133 @@
+<h1 align="center">venvctl</h1>
+
 <p align="center">
-  <samp>venvctl on · venvctl nuke · venvctl repair · venvctl doctor</samp>
+  <b>Control your Python virtual environments on Windows.</b><br>
+  One <code>on</code>/<code>off</code> in PowerShell, CMD and Git Bash. Find, unlock, repair and prune venvs from a single binary.
 </p>
 
 <p align="center">
-  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square">
-  <img alt="shells" src="https://img.shields.io/badge/shells-PowerShell%20%7C%20CMD%20%7C%20Git%20Bash-5391FE?style=flat-square">
-  <img alt="binary" src="https://img.shields.io/badge/single%20binary-7.8%20MB-555?style=flat-square">
-  <img alt="go" src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square">
-  <img alt="status" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
+  <a href="https://github.com/Kcodess2807/venvctl/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Kcodess2807/venvctl/ci.yml?branch=main&style=flat-square&label=ci"></a>
+  <img alt="Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square">
+  <img alt="PowerShell, CMD, Git Bash" src="https://img.shields.io/badge/shells-PowerShell%20%C2%B7%20CMD%20%C2%B7%20Git%20Bash-5391FE?style=flat-square">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
+  <img alt="pre-release" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
 </p>
 
-# venvctl
-
-<p align="center">
-  <b>venvctl is a single-binary Windows CLI that manages your Python virtual environments.</b>
-  <br>
-  It gives you one <code>on</code>/<code>off</code> in PowerShell, CMD and Git Bash, finds forgotten venvs, deletes locked ones
-  <br>
-  without killing your editor, and repairs venvs after you move them. uv creates environments; venvctl manages them.
-</p>
-
-<p align="center"><sub>Not related to the <code>venvctl</code> package on PyPI.</sub></p>
-
-<br>
+<p align="center"><sub>venvctl creates environments with uv or venv and manages them afterwards. It does not install packages or Python versions.<br>Not related to the <code>venvctl</code> package on PyPI.</sub></p>
 
 ---
 
 ```text
-PS D:\code\api> venvctl nuke api
-1 process(es) hold files in C:\Users\you\AppData\Local\venvctl\envs\api:
+PS D:\code\api> venvctl nuke old-api
+1 process(es) hold files in C:\Users\you\AppData\Local\venvctl\envs\old-api:
   PID  NAME    SPAWNED BY      OPEN FILES
 30728  Python  powershell.exe  1: python.exe
 terminate 1 process(es)? [y/N]
 ```
 
-Windows normally answers "Access is denied (os error 5)" and never says who. venvctl names the process, says what started it, and asks first. It refuses outright when the holder is VS Code, PyCharm or a shell. It renames the venv away before deleting, so a failed delete never leaves it half-deleted.
+Deleting a venv on Windows often fails with `Access is denied (os error 5)` and no explanation. venvctl identifies the process holding the files and what launched it, asks before stopping it, and refuses when the holder is an editor or a shell. The folder is renamed before it is deleted, so a failed delete never leaves a half-removed environment behind.
 
-<br>
+## Features
 
----
-
-## Why not just activate scripts and `uv run`?
-
-| You hit | Usually | With venvctl |
-|---|---|---|
-| A different activate command per shell | `Activate.ps1`, `activate.bat`, `source activate` | `venvctl on`, the same in all three |
-| `.venv` won't delete | close things at random, reboot | the lockers are named, your editor is protected, the delete is rename-first |
-| A project folder was moved, so its `pip.exe` breaks | recreate the venv | `venvctl repair` rewrites the launcher paths |
-| 50 forgotten venvs eating disk | WinDirStat and guesswork | `venvctl list --sort size`, then `venvctl prune --older-than 180d` |
-| `python` opens the Microsoft Store | search the error | `venvctl doctor` says which alias it is and how to fix it |
-
-It never runs `Activate.ps1`. PowerShell still needs to load your profile; if your policy blocks that, `venvctl doctor` explains the fix.
-
-<br>
-
----
-
-## How it compares
-
-| | Activate in every shell | Find all venvs on disk | Delete a locked venv safely | Repair a moved venv |
-|---|---|---|---|---|
-| **uv** | ✗ no `activate` (by design) | ✗ | ✗ "Access is denied" | relocatable venvs avoid it |
-| **VS Code** | inside its own terminals only | workspace only | ✗ | ✗ |
-| **PowerToys File Locksmith** | ✗ | ✗ | finds more lockers than venvctl, but its `--kill` stops every one of them, with no delete step | ✗ |
-| **killpy** | ✗ | ✓ more env types (conda, poetry, pipx) | ✗ plain delete | ✗ |
-| **venvctl** | ✓ PowerShell 5.1/7, CMD, Git Bash | ✓ every fixed drive | ✓ names lockers, protects editors, asks, rename-first | ✓ pip/venv and older uv venvs |
-
-When the Restart Manager names no locker, venvctl asks File Locksmith, if it's installed, for a read-only full scan.
-
-<br>
-
----
-
-## Numbers
-
-| Measured on a Windows 11 laptop | |
+| | |
 |---|---|
-| Venvs found by the author's first `venvctl scan` | 77 venvs, 15.8 GB |
-| Auto-activate hook cost per prompt, folder unchanged | 0.43 ms (p99) |
-| A full `venvctl` run, compared with an empty `python -c pass` | ~36 ms vs ~71 ms |
+| **One activation command** | `venvctl on` and `venvctl off` behave the same in PowerShell 5.1 and 7, CMD and Git Bash. `Activate.ps1` is never run; PATH is saved once and restored exactly. |
+| **Auto-activate on `cd`** | Opt-in. Only project roots you have approved with `venvctl allow` activate, because activating a venv runs its code. About 0.4 ms per prompt when nothing changed. |
+| **Safe deletion** | `nuke` and `prune` name the locking processes via the Windows Restart Manager, protect editors and shells, and delete rename-first. PowerToys File Locksmith is used as a read-only fallback when installed. |
+| **Discovery** | `scan` walks every fixed drive for `pyvenv.cfg`; `list` shows size, Python version, last use and broken or missing environments; `prune` removes them by age, size or status. |
+| **Repair after a move** | `repair` rewrites the absolute paths that pip and uv launchers embed, so a renamed project folder works again without reinstalling. Environments venvctl creates are relocatable and never need it. |
+| **Editor visibility** | Central environments are linked to their project through a PEP 832 `.venv` redirect file. |
+| **Diagnostics** | `doctor` checks the Microsoft Store `python.exe` stub, the ExecutionPolicy scope that blocks your profile, long paths, the VC++ runtime, shell hooks and venvs inside cloud-synced folders. |
+| **Scriptable** | Every command supports `--json`, and exit codes are fixed: 0 ok, 1 failure, 2 usage, 3 refused, 4 nothing to do. |
 
-<br>
+## Installation
 
----
-
-## Quick start
-
-There are no release downloads yet, so build it from source. You need Go 1.26+.
+Pre-built binaries and package-manager installs will come with the first release. Until then, build from source with Go 1.26 or newer:
 
 ```powershell
-git clone https://github.com/Kcodess2807/venvctl; cd venvctl
+git clone https://github.com/Kcodess2807/venvctl
+cd venvctl
 go build -o venvctl.exe ./cmd/venvctl
-mkdir "$env:LOCALAPPDATA\venvctl\bin" -Force | Out-Null
-copy venvctl.exe "$env:LOCALAPPDATA\venvctl\bin\"   # then add that folder to your user PATH
-venvctl init --dry-run   # shows exactly what it would add to your shell profiles
-venvctl init             # then open a new terminal
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\venvctl\bin" | Out-Null
+Copy-Item venvctl.exe "$env:LOCALAPPDATA\venvctl\bin\"
 ```
 
-Five commands cover most days:
+Add `%LOCALAPPDATA%\venvctl\bin` to your user `PATH`, then install the shell hooks:
 
 ```powershell
-venvctl on               # activate the nearest .venv (or: venvctl on api)
-venvctl create api       # central venv, linked to this folder (uses uv if installed)
-venvctl list --sort size # every venv with size and last use
-venvctl nuke old-thing   # delete, unlocking it first
-venvctl doctor           # what's wrong with this machine's Python setup
+venvctl init --dry-run   # shows every change it would make to your shell profiles
+venvctl init             # installs the hooks; open a new terminal afterwards
 ```
 
-<br>
+`venvctl init --remove` uninstalls the hooks again.
 
----
+## Usage
+
+```powershell
+venvctl on                    # activate the nearest .venv
+venvctl on api                # activate by name or path
+venvctl off
+
+venvctl create api            # central environment, linked to the current folder
+venvctl create --local        # .\.venv in the current folder
+
+venvctl scan                  # register every venv on your drives
+venvctl list --sort size      # see them with size and last use
+venvctl prune --older-than 180d --dry-run
+
+venvctl nuke old-api          # delete, unlocking first
+venvctl repair --dry-run      # preview the fix for a moved venv
+venvctl doctor                # diagnose this machine's Python setup
+```
+
+Run `venvctl --help` for the full command list, or `venvctl <command> --help` for details and examples.
+
+### Auto-activation
+
+```powershell
+venvctl config auto-activate on   # once; takes effect in new terminals
+cd D:\code\api
+venvctl allow                     # trust this project root
+```
+
+From then on, entering the project activates its venv and leaving deactivates it. Environments you or your editor activated by hand are never touched. In CMD this requires [Clink](https://chrisant996.github.io/clink/) and is experimental.
 
 ## How it works
 
 ```text
-venvctl on ──→ shell function ──→ venvctl.exe prints a script ──→ the shell evaluates it in place
-                  (installed by `venvctl init` in $PROFILE, CMD AutoRun, .bashrc)
+venvctl on ──► shell function ──► venvctl.exe prints a script ──► the shell evaluates it in place
+               (installed once by `venvctl init` in $PROFILE, the CMD AutoRun key and .bashrc)
 ```
 
-- **Activation** works the way fnm, zoxide and starship do. A child process can't change your shell, so the shell evaluates text the binary prints. PATH is saved once and restored exactly.
-- **Auto-activate on `cd`** is opt-in (`venvctl config auto-activate on`). It only activates folders you trust with `venvctl allow`, because activating a venv runs its code. In CMD it needs Clink and is experimental (untested).
-- **`create` makes relocatable venvs** with uv 0.2.31+, so they never need repair. `venvctl repair` fixes venvs made by pip/venv and older uv after their folder moved; new uv venvs made with `--relocatable` don't need it.
-- **Editors find central venvs** through a PEP 832 `.venv` redirect file in the project folder (draft PEP; see [redirect.md](redirect.md)).
-- **Scripting** is supported: every command has `--json` and fixed exit codes (0 ok, 1 failure, 2 usage, 3 refused, 4 nothing to do). See [docs/json.md](docs/json.md).
+A child process cannot modify its parent shell's environment, so venvctl uses the same pattern as fnm, zoxide and starship: the binary prints shell code and a small function evaluates it. PowerShell still has to load your profile; if your execution policy prevents that, `venvctl doctor` names the scope responsible and the fix.
 
-<br>
+Full details, including the Restart Manager integration, launcher formats handled by `repair`, and the trust model, are in the [design notes](design.md) and the [project record](venvctl-complete.md).
 
----
+## Comparison
 
-## Status and limits
+| | Activate in every shell | Find venvs across drives | Delete a locked venv safely | Repair a moved venv |
+|---|:-:|:-:|:-:|:-:|
+| **uv** | – | – | – | avoided via `--relocatable` |
+| **VS Code** | its own terminals | workspace only | – | – |
+| **PowerToys File Locksmith** | – | – | finds more lockers; `--kill` stops all of them, no delete | – |
+| **killpy** | – | ✓ more environment types | plain delete | – |
+| **venvctl** | ✓ | ✓ | ✓ attribution, editor protection, rename-first | ✓ pip, venv and older uv |
 
-- Pre-release, not signed yet, Windows only by design.
-- Tested on PowerShell 5.1, CMD and Git Bash. Clink, oh-my-posh and starship integration are untested.
-- Repair of uv ≥ 0.9.9 launchers is tested on synthetic launchers, not yet on a real current-uv install.
-- `venvctl init --remove` takes every hook out again: profile lines, the AutoRun entry and `.bashrc`.
+## Status
 
-## Docs
+venvctl is pre-release. Binaries are unsigned, and there are no release downloads yet.
 
-- [The complete project record](venvctl-complete.md)
-- [Design](design.md)
-- [JSON output](docs/json.md)
-- [`.venv` redirect files](redirect.md)
-- [Decision log](floated.md)
+- Tested on Windows 11 with PowerShell 5.1, CMD and Git Bash.
+- CMD auto-activation (Clink), oh-my-posh and starship integration are untested.
+- Repair of launchers written by uv 0.9.9 and later is verified against synthetic launchers only.
 
----
+## Documentation
 
-<p align="center">
-  <a href="venvctl-complete.md">Complete record</a> · <a href="docs/json.md">JSON</a> · <a href="redirect.md">Redirect files</a>
-</p>
+- [Design](design.md): architecture and command flows
+- [JSON output](docs/json.md): schemas and exit codes
+- [Redirect files](redirect.md): how PEP 832 `.venv` files are used
+- [Project record](venvctl-complete.md): everything built, tested and decided
 
-<p align="center">
-  <sub>License: not chosen yet (add a LICENSE file before publishing).</sub>
-</p>
+## License
+
+[MIT](LICENSE)
