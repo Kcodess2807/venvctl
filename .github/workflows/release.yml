@@ -1,20 +1,27 @@
 name: release
 
-# Tag vX.Y.Z (PEP 440 compatible, e.g. v0.1.0 or v0.2.0rc1) and push it. This builds amd64 + arm64
-# (unstripped), the two pip wheels, fills the winget and Scoop manifests, creates the GitHub
-# release with every artifact, and publishes the wheels to PyPI through trusted publishing.
+# Tag vX.Y.Z (PEP 440 compatible, e.g. v0.1.0 or v0.2.0rc1) and push it. The Windows job builds
+# amd64 + arm64 (unstripped), the two pip wheels, fills the winget and Scoop manifests and creates
+# the GitHub release with every artifact. The Linux job then publishes the wheels from that release
+# to PyPI through trusted publishing (pypa/gh-action-pypi-publish runs on Linux only).
+#
+# To (re)publish an existing release to PyPI without rebuilding: Actions > release > Run workflow,
+# with the tag, e.g. v0.1.0.
 on:
   push:
     tags: ["v*"]
-
-permissions:
-  contents: write
-  id-token: write # PyPI trusted publishing
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing release tag to publish to PyPI, e.g. v0.1.0"
+        required: true
 
 jobs:
-  release:
+  build:
+    if: github.event_name == 'push'
     runs-on: windows-latest
-    environment: pypi
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,7 +80,23 @@ jobs:
           $assets = @(Get-ChildItem dist/*.zip, dist/SHA256SUMS, dist/wheels/*.whl, dist/manifests/*, install.ps1 | ForEach-Object FullName)
           gh release create $env:GITHUB_REF_NAME @assets --title "venvctl $env:VERSION" --generate-notes
 
-      - name: publish wheels to PyPI
+  pypi:
+    needs: build
+    # runs after a tag build, or on its own from workflow_dispatch (when build is skipped)
+    if: always() && (needs.build.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.build.result == 'skipped'))
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # PyPI trusted publishing
+    steps:
+      - name: wheels from the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.whl' --dir dist
+
+      - name: publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/wheels
+          packages-dir: dist
