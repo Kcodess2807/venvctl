@@ -48,7 +48,7 @@ Deleting a venv on Windows often fails with `Access is denied (os error 5)` and 
 
 Every option installs the same single binary. Pick one.
 
-> The first three options need the v0.1.0 release, which is not out yet. Until then, use **build from source**.
+> The first four options need the v0.1.0 release, which is not out yet. Until then, use **build from source**.
 
 **winget**
 
@@ -69,6 +69,23 @@ pip install venvctl-win
 ```
 
 pip puts `venvctl.exe` in that Python's `Scripts\` folder. If `venvctl` is then "not recognized", that folder is not on your `PATH`; run `python -m venvctl_win init` instead in step 2. The hooks store the full path to the exe, so `on`/`off`/`cd` keep working either way.
+
+**uv.** Same package, installed as a tool in its own isolated environment:
+
+```powershell
+uv tool install venvctl-win
+```
+
+If `venvctl` is "not recognized" afterwards, run `uv tool update-shell` once and open a new terminal.
+
+**Just trying it?** `uvx` runs venvctl without installing anything. Good for the read-only commands:
+
+```powershell
+uvx --from venvctl-win venvctl doctor   # what's wrong with this machine's Python setup
+uvx --from venvctl-win venvctl scan     # find every venv on your drives
+```
+
+`on`, `off` and `cd` need the shell hooks from step 2, which point at a fixed exe path, so use a real install for those.
 
 **Build from source** (works today; needs [Go](https://go.dev/dl/) 1.26 or newer):
 
@@ -111,7 +128,7 @@ venvctl off
 
 ### Updating
 
-Re-run the same install command (`winget upgrade Kcodess2807.venvctl`, the installer script, or `pip install -U venvctl-win`). If the exe moved to a new folder, run `venvctl init` again; `venvctl doctor` warns when a hook points at an old path.
+Re-run the same install command (`winget upgrade Kcodess2807.venvctl`, the installer script, `pip install -U venvctl-win`, or `uv tool upgrade venvctl-win`). If the exe moved to a new folder, run `venvctl init` again; `venvctl doctor` warns when a hook points at an old path.
 
 ### Uninstalling
 
@@ -119,7 +136,7 @@ Re-run the same install command (`winget upgrade Kcodess2807.venvctl`, the insta
 venvctl init --remove    # removes the hooks from every shell
 ```
 
-Then remove the binary the way you installed it (`winget uninstall Kcodess2807.venvctl`, `pip uninstall venvctl-win`, or delete `%LOCALAPPDATA%\venvctl\bin` and its `PATH` entry). Your venvs and venvctl's registry live in `%LOCALAPPDATA%\venvctl`; delete that folder too only if you no longer want the central venvs inside it.
+Then remove the binary the way you installed it (`winget uninstall Kcodess2807.venvctl`, `pip uninstall venvctl-win`, `uv tool uninstall venvctl-win`, or delete `%LOCALAPPDATA%\venvctl\bin` and its `PATH` entry). Your venvs and venvctl's registry live in `%LOCALAPPDATA%\venvctl`; delete that folder too only if you no longer want the central venvs inside it.
 
 ## Usage
 
