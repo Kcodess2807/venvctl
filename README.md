@@ -10,7 +10,8 @@
   <img alt="Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square">
   <img alt="PowerShell, CMD, Git Bash" src="https://img.shields.io/badge/shells-PowerShell%20%C2%B7%20CMD%20%C2%B7%20Git%20Bash-5391FE?style=flat-square">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
-  <img alt="pre-release" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
+  <a href="https://github.com/Kcodess2807/venvctl/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/Kcodess2807/venvctl?style=flat-square&label=release"></a>
+  <a href="https://pypi.org/project/venvctl-win/"><img alt="PyPI venvctl-win" src="https://img.shields.io/pypi/v/venvctl-win?style=flat-square&label=pypi"></a>
 </p>
 
 <p align="center"><sub>venvctl creates environments with uv or venv and manages them afterwards. It does not install packages or Python versions.<br>Not related to the <code>venvctl</code> package on PyPI.</sub></p>
@@ -48,7 +49,7 @@ Deleting a venv on Windows often fails with `Access is denied (os error 5)` and 
 
 Every option installs the same single binary. Pick one.
 
-> The first four options need the v0.1.0 release, which is not out yet. Until then, use **build from source**.
+> The winget package is waiting for Microsoft's review. Until it shows up, use any of the other options.
 
 **winget**
 
@@ -192,7 +193,7 @@ Full details, including the Restart Manager integration, launcher formats handle
 
 ## Status
 
-venvctl is pre-release. Binaries are unsigned, and there are no release downloads yet.
+v0.1.0 is the first release. The binaries are not code-signed yet, so Windows SmartScreen or your antivirus may warn on first run; every release lists the SHA256 of each file in `SHA256SUMS`.
 
 - Tested on Windows 11 with PowerShell 5.1, CMD and Git Bash.
 - CMD auto-activation (Clink), oh-my-posh and starship integration are untested.
