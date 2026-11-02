@@ -1,15 +1,16 @@
-# DRAFT winget manifest for venvctl. Replace every <...> placeholder before submitting.
-# winget-pkgs wants the multi-file form (version / installer / defaultLocale); split this with
-# `wingetcreate` or by hand when publishing. Hashes come from dist\SHA256SUMS (upper-case them).
+# winget manifest template for venvctl. The release workflow fills @VERSION@, @SHA_AMD64@ and
+# @SHA_ARM64@ from dist\SHA256SUMS and attaches the result to the GitHub release.
+# winget-pkgs wants the multi-file form (version / installer / defaultLocale): split it with
+# `wingetcreate` (or by hand) when submitting the PR.
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
-PackageIdentifier: <Publisher>.venvctl
-PackageVersion: <0.1.0>
+PackageIdentifier: Kcodess2807.venvctl
+PackageVersion: @VERSION@
 PackageLocale: en-US
-Publisher: <Publisher>
+Publisher: Arush Karnatak
 PackageName: venvctl
-License: <MIT>
-LicenseUrl: <https://github.com/OWNER/venvctl/blob/main/LICENSE>
-PackageUrl: <https://github.com/OWNER/venvctl>
+License: MIT
+LicenseUrl: https://github.com/Kcodess2807/venvctl/blob/main/LICENSE
+PackageUrl: https://github.com/Kcodess2807/venvctl
 ShortDescription: Control your Python virtual environments on Windows
 Description: >-
   Activate venvs the same way in PowerShell, CMD and Git Bash (no ExecutionPolicy errors),
@@ -22,7 +23,7 @@ Tags:
   - virtualenv
   - uv
   - powershell
-ReleaseNotesUrl: <https://github.com/OWNER/venvctl/releases/tag/v0.1.0>
+ReleaseNotesUrl: https://github.com/Kcodess2807/venvctl/releases/tag/v@VERSION@
 InstallationNotes: Run `venvctl init` once, then open a new terminal.
 Installers:
   - Architecture: x64
@@ -31,15 +32,15 @@ Installers:
     NestedInstallerFiles:
       - RelativeFilePath: venvctl.exe
         PortableCommandAlias: venvctl
-    InstallerUrl: <https://github.com/OWNER/venvctl/releases/download/v0.1.0/venvctl-0.1.0-windows-amd64.zip>
-    InstallerSha256: <SHA256 OF venvctl-0.1.0-windows-amd64.zip>
+    InstallerUrl: https://github.com/Kcodess2807/venvctl/releases/download/v@VERSION@/venvctl-@VERSION@-windows-amd64.zip
+    InstallerSha256: @SHA_AMD64@
   - Architecture: arm64
     InstallerType: zip
     NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: venvctl.exe
         PortableCommandAlias: venvctl
-    InstallerUrl: <https://github.com/OWNER/venvctl/releases/download/v0.1.0/venvctl-0.1.0-windows-arm64.zip>
-    InstallerSha256: <SHA256 OF venvctl-0.1.0-windows-arm64.zip>
+    InstallerUrl: https://github.com/Kcodess2807/venvctl/releases/download/v@VERSION@/venvctl-@VERSION@-windows-arm64.zip
+    InstallerSha256: @SHA_ARM64@
 ManifestType: singleton
 ManifestVersion: 1.6.0

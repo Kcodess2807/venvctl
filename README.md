@@ -42,17 +42,29 @@ Deleting a venv on Windows often fails with `Access is denied (os error 5)` and 
 
 ## Installation
 
-Pre-built binaries and package-manager installs will come with the first release. Until then, build from source with Go 1.26 or newer:
+Every method below installs the same `venvctl.exe` (Windows 10/11, x64 and arm64). Pick one, then run `venvctl init`.
 
 ```powershell
-git clone https://github.com/Kcodess2807/venvctl
-cd venvctl
-go build -o venvctl.exe ./cmd/venvctl
-New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\venvctl\bin" | Out-Null
-Copy-Item venvctl.exe "$env:LOCALAPPDATA\venvctl\bin\"
+winget install Kcodess2807.venvctl
 ```
 
-Add `%LOCALAPPDATA%\venvctl\bin` to your user `PATH`, then install the shell hooks:
+Until the winget manifest is merged, or if you prefer not to use winget, the installer script downloads the latest release, verifies its checksum, puts the exe in `%LOCALAPPDATA%\venvctl\bin` and adds that folder to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/Kcodess2807/venvctl/main/install.ps1 | iex
+```
+
+Already living in pip? The `venvctl-win` wheel is the same binary (the `venvctl` name on PyPI belongs to an unrelated package):
+
+```powershell
+pip install venvctl-win
+```
+
+pip drops `venvctl.exe` into that interpreter's `Scripts\` folder. If that folder is not on your `PATH`, `python -m venvctl_win init` works too; the hooks record the exe's full path, so `on`/`off`/`cd` do not depend on `PATH` either way.
+
+Also available: a [Scoop manifest](packaging/scoop/venvctl.json) and the release zips (with `SHA256SUMS`) on the [Releases](https://github.com/Kcodess2807/venvctl/releases) page. To build from source: `go build -o venvctl.exe ./cmd/venvctl` with Go 1.26 or newer.
+
+Then install the shell hooks:
 
 ```powershell
 venvctl init --dry-run   # shows every change it would make to your shell profiles

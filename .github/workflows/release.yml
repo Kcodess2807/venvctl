@@ -1,0 +1,79 @@
+name: release
+
+# Tag vX.Y.Z (PEP 440 compatible, e.g. v0.1.0 or v0.2.0rc1) and push it. This builds amd64 + arm64
+# (unstripped), the two pip wheels, fills the winget and Scoop manifests, creates the GitHub
+# release with every artifact, and publishes the wheels to PyPI through trusted publishing.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write # PyPI trusted publishing
+
+jobs:
+  release:
+    runs-on: windows-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: version from the tag
+        shell: pwsh
+        run: '"VERSION=$($env:GITHUB_REF_NAME.TrimStart("v"))" >> $env:GITHUB_ENV'
+
+      - name: test
+        run: go test ./...
+
+      - name: install go-winres
+        run: go install github.com/tc-hib/go-winres@latest
+
+      - name: build amd64 + arm64
+        shell: pwsh
+        run: ./build.ps1 -Version $env:VERSION
+
+      - name: wheels
+        shell: pwsh
+        run: |
+          foreach ($a in "amd64", "arm64") {
+            python packaging/pypi/build_wheel.py --version $env:VERSION --arch $a --exe "dist/venvctl-$env:VERSION-windows-$a/venvctl.exe" --out dist/wheels
+          }
+          python -m pip install --quiet --no-deps --prefix dist/pipcheck (Get-ChildItem dist/wheels/*win_amd64.whl).FullName
+          & dist/pipcheck/Scripts/venvctl.exe version
+
+      - name: fill winget and Scoop manifests
+        shell: pwsh
+        run: |
+          $sums = Get-Content dist/SHA256SUMS
+          $sha = @{}
+          foreach ($a in "amd64", "arm64") {
+            $sha[$a] = (($sums | Where-Object { $_ -like "*venvctl-$env:VERSION-windows-$a.zip" }) -split "\s+")[0].ToUpperInvariant()
+          }
+          New-Item -ItemType Directory dist/manifests | Out-Null
+          foreach ($f in "packaging/winget/manifest.yaml", "packaging/scoop/venvctl.json") {
+            (Get-Content $f -Raw).Replace("@VERSION@", $env:VERSION).Replace("@SHA_AMD64@", $sha.amd64).Replace("@SHA_ARM64@", $sha.arm64) |
+              Set-Content (Join-Path dist/manifests (Split-Path $f -Leaf)) -NoNewline -Encoding utf8
+          }
+
+      - name: GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(Get-ChildItem dist/*.zip, dist/SHA256SUMS, dist/wheels/*.whl, dist/manifests/*, install.ps1 | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME @assets --title "venvctl $env:VERSION" --generate-notes
+
+      - name: publish wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/wheels

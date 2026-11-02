@@ -1,17 +1,17 @@
 {
-    "##": "DRAFT Scoop manifest for venvctl. Replace every <...> placeholder; hashes come from dist\\SHA256SUMS.",
-    "version": "<0.1.0>",
+    "##": "Scoop manifest template for venvctl. The release workflow fills @VERSION@, @SHA_AMD64@ and @SHA_ARM64@ from dist\\SHA256SUMS.",
+    "version": "@VERSION@",
     "description": "Control your Python virtual environments on Windows: activate, find, prune, unlock, repair, diagnose.",
-    "homepage": "<https://github.com/OWNER/venvctl>",
-    "license": "<MIT>",
+    "homepage": "https://github.com/Kcodess2807/venvctl",
+    "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "<https://github.com/OWNER/venvctl/releases/download/v0.1.0/venvctl-0.1.0-windows-amd64.zip>",
-            "hash": "<SHA256 OF venvctl-0.1.0-windows-amd64.zip>"
+            "url": "https://github.com/Kcodess2807/venvctl/releases/download/v@VERSION@/venvctl-@VERSION@-windows-amd64.zip",
+            "hash": "@SHA_AMD64@"
         },
         "arm64": {
-            "url": "<https://github.com/OWNER/venvctl/releases/download/v0.1.0/venvctl-0.1.0-windows-arm64.zip>",
-            "hash": "<SHA256 OF venvctl-0.1.0-windows-arm64.zip>"
+            "url": "https://github.com/Kcodess2807/venvctl/releases/download/v@VERSION@/venvctl-@VERSION@-windows-arm64.zip",
+            "hash": "@SHA_ARM64@"
         }
     },
     "bin": "venvctl.exe",
@@ -20,15 +20,15 @@
         "Shell hooks record this exe's path; after 'scoop update' moves it, run 'venvctl init' again (venvctl doctor flags a stale hook)."
     ],
     "checkver": {
-        "github": "<https://github.com/OWNER/venvctl>"
+        "github": "https://github.com/Kcodess2807/venvctl"
     },
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "<https://github.com/OWNER/venvctl>/releases/download/v$version/venvctl-$version-windows-amd64.zip"
+                "url": "https://github.com/Kcodess2807/venvctl/releases/download/v$version/venvctl-$version-windows-amd64.zip"
             },
             "arm64": {
-                "url": "<https://github.com/OWNER/venvctl>/releases/download/v$version/venvctl-$version-windows-arm64.zip"
+                "url": "https://github.com/Kcodess2807/venvctl/releases/download/v$version/venvctl-$version-windows-arm64.zip"
             }
         },
         "hash": {
