@@ -18,17 +18,21 @@ $name = "venvctl-$version-windows-$arch.zip"
 $asset = $release.assets | Where-Object name -eq $name | Select-Object -First 1
 if (-not $asset) { throw "release $($release.tag_name) has no $name" }
 
+# The checksum is mandatory: no SHA256SUMS or no line for this zip means nothing is installed.
+# Downloaded to a file (GitHub serves it as application/octet-stream, which Invoke-RestMethod may return as bytes).
 $sumsAsset = $release.assets | Where-Object name -eq "SHA256SUMS" | Select-Object -First 1
-$expected = ""
-if ($sumsAsset) {
-    $line = (Invoke-RestMethod $sumsAsset.browser_download_url -Headers $headers) -split "`n" | Where-Object { $_ -like "*  $name" }
-    if ($line) { $expected = ($line -split "\s+")[0].ToLowerInvariant() }
-}
+if (-not $sumsAsset) { throw "release $($release.tag_name) has no SHA256SUMS; not installing an unverified binary" }
+$sumsFile = Join-Path $env:TEMP "venvctl-SHA256SUMS"
+Invoke-WebRequest $sumsAsset.browser_download_url -OutFile $sumsFile -Headers $headers
+$line = Get-Content $sumsFile | Where-Object { $_ -like "*  $name" } | Select-Object -First 1
+Remove-Item $sumsFile
+if (-not $line) { throw "SHA256SUMS has no entry for $name; not installing an unverified binary" }
+$expected = ($line -split "\s+")[0].ToLowerInvariant()
 
 $zip = Join-Path $env:TEMP $name
 Invoke-WebRequest $asset.browser_download_url -OutFile $zip -Headers $headers
 $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($expected -and $actual -ne $expected) { Remove-Item $zip; throw "checksum mismatch for $name (expected $expected, got $actual)" }
+if ($actual -ne $expected) { Remove-Item $zip; throw "checksum mismatch for $name (expected $expected, got $actual)" }
 
 $bin = Join-Path $env:LOCALAPPDATA "venvctl\bin"
 New-Item -ItemType Directory -Force $bin | Out-Null
