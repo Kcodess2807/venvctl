@@ -42,36 +42,84 @@ Deleting a venv on Windows often fails with `Access is denied (os error 5)` and 
 
 ## Installation
 
-Every method below installs the same `venvctl.exe` (Windows 10/11, x64 and arm64). Pick one, then run `venvctl init`.
+**Requirements:** Windows 10 or 11 (x64 or arm64). No admin rights needed. Python itself is not required to install venvctl; [uv](https://docs.astral.sh/uv/) is used for `create` when it is installed.
+
+### 1. Get `venvctl.exe`
+
+Every option installs the same single binary. Pick one.
+
+> The first three options need the v0.1.0 release, which is not out yet. Until then, use **build from source**.
+
+**winget**
 
 ```powershell
 winget install Kcodess2807.venvctl
 ```
 
-Until the winget manifest is merged, or if you prefer not to use winget, the installer script downloads the latest release, verifies its checksum, puts the exe in `%LOCALAPPDATA%\venvctl\bin` and adds that folder to your user `PATH`:
+**Installer script.** Downloads the latest release, checks it against `SHA256SUMS`, puts `venvctl.exe` in `%LOCALAPPDATA%\venvctl\bin` and adds that folder to your user `PATH`. It does not touch your shell profiles.
 
 ```powershell
 irm https://raw.githubusercontent.com/Kcodess2807/venvctl/main/install.ps1 | iex
 ```
 
-Already living in pip? The `venvctl-win` wheel is the same binary (the `venvctl` name on PyPI belongs to an unrelated package):
+**pip.** The package is called `venvctl-win`; the name `venvctl` on PyPI belongs to an unrelated project.
 
 ```powershell
 pip install venvctl-win
 ```
 
-pip drops `venvctl.exe` into that interpreter's `Scripts\` folder. If that folder is not on your `PATH`, `python -m venvctl_win init` works too; the hooks record the exe's full path, so `on`/`off`/`cd` do not depend on `PATH` either way.
+pip puts `venvctl.exe` in that Python's `Scripts\` folder. If `venvctl` is then "not recognized", that folder is not on your `PATH`; run `python -m venvctl_win init` instead in step 2. The hooks store the full path to the exe, so `on`/`off`/`cd` keep working either way.
 
-Also available: a [Scoop manifest](packaging/scoop/venvctl.json) and the release zips (with `SHA256SUMS`) on the [Releases](https://github.com/Kcodess2807/venvctl/releases) page. To build from source: `go build -o venvctl.exe ./cmd/venvctl` with Go 1.26 or newer.
-
-Then install the shell hooks:
+**Build from source** (works today; needs [Go](https://go.dev/dl/) 1.26 or newer):
 
 ```powershell
-venvctl init --dry-run   # shows every change it would make to your shell profiles
-venvctl init             # installs the hooks; open a new terminal afterwards
+git clone https://github.com/Kcodess2807/venvctl
+cd venvctl
+go build -o venvctl.exe ./cmd/venvctl
+
+# put it in a folder on your user PATH
+$bin = "$env:LOCALAPPDATA\venvctl\bin"
+New-Item -ItemType Directory -Force $bin | Out-Null
+Copy-Item venvctl.exe $bin
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")
 ```
 
-`venvctl init --remove` uninstalls the hooks again.
+Open a new terminal so the new `PATH` is picked up.
+
+Release zips with `SHA256SUMS` and a [Scoop manifest](packaging/scoop/venvctl.json) will also be on the [Releases](https://github.com/Kcodess2807/venvctl/releases) page.
+
+### 2. Install the shell hooks
+
+`on`, `off` and `cd` change your current shell, which needs a small hook in each shell's startup file (PowerShell `$PROFILE`, the CMD AutoRun registry value, Git Bash `.bashrc`). Preview first, then install:
+
+```powershell
+venvctl init --dry-run   # shows every change it would make, changes nothing
+venvctl init             # installs the hooks
+```
+
+Open a new terminal afterwards. If PowerShell refuses to load your profile ("running scripts is disabled"), `venvctl doctor` names the policy scope responsible and the fix.
+
+### 3. Check it works
+
+```powershell
+venvctl version          # the installed version
+venvctl doctor           # checks PATH, the Store python stub, ExecutionPolicy, hooks and more
+cd D:\code\your-project
+venvctl on               # activates the nearest .venv; your prompt shows its name
+venvctl off
+```
+
+### Updating
+
+Re-run the same install command (`winget upgrade Kcodess2807.venvctl`, the installer script, or `pip install -U venvctl-win`). If the exe moved to a new folder, run `venvctl init` again; `venvctl doctor` warns when a hook points at an old path.
+
+### Uninstalling
+
+```powershell
+venvctl init --remove    # removes the hooks from every shell
+```
+
+Then remove the binary the way you installed it (`winget uninstall Kcodess2807.venvctl`, `pip uninstall venvctl-win`, or delete `%LOCALAPPDATA%\venvctl\bin` and its `PATH` entry). Your venvs and venvctl's registry live in `%LOCALAPPDATA%\venvctl`; delete that folder too only if you no longer want the central venvs inside it.
 
 ## Usage
 
