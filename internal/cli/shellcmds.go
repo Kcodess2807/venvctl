@@ -39,7 +39,7 @@ func offCmd() *cobra.Command {
 		Use:     "off",
 		Aliases: []string{"deactivate"},
 		GroupID: "use",
-		Short:   "Deactivate the venv venvctl activated; restores PATH and prompt",
+		Short:   "Deactivate the active venv and restore PATH and prompt",
 		Example: `  venvctl off`,
 		Args:    nargs(cobra.NoArgs),
 		RunE:    needHook,

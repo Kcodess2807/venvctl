@@ -43,7 +43,7 @@ func resolve(reg *envmgr.Registry, arg, verb string) (envmgr.Entry, error) {
 		rows = append(rows, []string{strconv.Itoa(i + 1), h.Name, h.Version, age(envmgr.Activity(h)), h.Path})
 	}
 	if !opt.json {
-		fmt.Fprintf(stderr, "%q matches %d environments:\n", amb.Name, len(amb.Hits))
+		fmt.Fprintf(stderr, "%q matches %d venvs:\n", amb.Name, len(amb.Hits))
 		table(stderr, []string{"#", "NAME", "PYTHON", "LAST USED", "PATH"}, rows, 0)
 	}
 	if interactive() {
@@ -89,7 +89,7 @@ Central envs live in %LOCALAPPDATA%\venvctl\envs\<name>. --local refuses cloud-s
 A central env is linked to the current folder: .venv is written there as a PEP 832 redirect
 file holding the env's path, so editors find it and "venvctl on" here activates it. A .venv
 folder blocks this; a redirect pointing elsewhere is replaced only after you agree (or --force).
---no-redirect skips it. See redirect.md.
+--no-redirect skips it.
 
 With uv 0.2.31 or newer the venv is created relocatable (uv venv --relocatable): its scripts
 and launchers use relative paths, so moving it never needs "venvctl repair". --no-relocatable
@@ -143,15 +143,21 @@ opts out. The python -m venv fallback has no such option.`,
 			}
 			cmdline, err := envmgr.CreateCommand(dest, py, !noRelocatable)
 			if err != nil {
-				return Fail(exitFail, err.Error(), "install it (`uv python install "+py+"` or python.org), or pass --python <path to python.exe>")
+				want := "3.12"
+				if py != "" {
+					want = py
+				}
+				return Fail(exitFail, err.Error(), "install Python (python.org or `uv python install "+want+"`), or pass --python <path to python.exe>")
 			}
 			if verbose {
 				note("%s %s", dim("running:"), quoteArgs(cmdline))
 			}
+			// uv's own lines ("Activate with: ...\Scripts\activate") would contradict ours, so they are
+			// captured and shown only on failure, or live with --verbose.
 			var buf bytes.Buffer
-			var out io.Writer = stderr
-			if opt.quiet || opt.json {
-				out = &buf
+			var out io.Writer = &buf
+			if verbose && !opt.quiet && !opt.json {
+				out = stderr
 			}
 			e, err := envmgr.Create(dest, cmdline, out)
 			if err != nil {
@@ -229,7 +235,7 @@ func linkCmd() *cobra.Command {
 		Short:   "Point this folder's .venv at an existing venv (a PEP 832 redirect file)",
 		Long: "Writes .venv in the current folder as a one-line redirect file holding the venv's absolute path\n" +
 			"(PEP 832, draft). Editors and tools that understand redirects then find the central venv as\n" +
-			"this project's environment, and `venvctl on` here activates it. See redirect.md.",
+			"this project's venv, and `venvctl on` here activates it.",
 		Example: `  venvctl link api
   venvctl link C:\envs\ml --force`,
 		Args: nargs(cobra.ExactArgs(1)),
@@ -545,13 +551,13 @@ func listCmd() *cobra.Command {
 				if !opt.quiet {
 					table(stdout, []string{" ", "NAME", "PYTHON", "SIZE", "LAST USED", "PATH"}, cells, 3)
 				}
-				say(dim(fmt.Sprintf("%d of %d environments, %s", len(rows), len(all), human(total))))
+				say(dim(fmt.Sprintf("%d of %d venvs, %s", len(rows), len(all), human(total))))
 			}
 			if len(rows) == 0 {
 				if len(all) == 0 {
-					return nothing("no environments known yet; run `venvctl scan` or `venvctl create <name>`")
+					return nothing("no venvs known yet; run `venvctl scan` or `venvctl create <name>`")
 				}
-				return nothing("no environments match")
+				return nothing("no venvs match")
 			}
 			return nil
 		},
@@ -684,13 +690,13 @@ func scanCmd() *cobra.Command {
 			for _, x := range pruned {
 				say("%s %s %s  %s", badMark(), gone, x.Name, dim(x.Path+" (folder gone)"))
 			}
-			say(dim(fmt.Sprintf("scanned %s dirs in %s: %d venvs found, %d new, %d pruned%s",
+			say(dim(fmt.Sprintf("scanned %s dirs in %s: %d venvs found, %d new, %d unregistered%s",
 				commas(p.Dirs.Load()), took.Round(time.Millisecond), len(found), len(added), len(pruned),
 				map[bool]string{true: " (dry run, registry unchanged)"}[dry])))
 			return nil
 		},
 	}
-	c.Flags().BoolVarP(&dry, "dry-run", "n", false, "show what would be registered or pruned, change nothing")
+	c.Flags().BoolVarP(&dry, "dry-run", "n", false, "show what would be registered or unregistered, change nothing")
 	return c
 }
 
@@ -973,7 +979,8 @@ func printNuke(r nukeResult) {
 			say("    also removed old trash: %s", dim(t))
 		}
 	case "unregistered", "would-unregister":
-		say("%s %s  %s", okMark(), r.Name, dim("folder already gone, "+strings.TrimPrefix(r.Status, "would-")+" "+r.Path))
+		verb := map[string]string{"unregistered": "unregistered", "would-unregister": "would unregister"}[r.Status]
+		say("%s %s  %s", okMark(), r.Name, dim("folder already gone, "+verb+" "+r.Path))
 	case "would-delete":
 		say("would delete %s  %s  (%s)", bold(r.Name), dim(r.Path), human(r.FreedBytes))
 		if len(r.Lockers) > 0 {
@@ -1008,6 +1015,21 @@ func lockerTable(w io.Writer, ls []lockerJSON) {
 	table(w, []string{"PID", "NAME", "SPAWNED BY", "OPEN FILES"}, rows, 0)
 }
 
+// nProcs reads "1 process" or "3 processes"; holdVerb agrees with it.
+func nProcs(n int) string {
+	if n == 1 {
+		return "1 process"
+	}
+	return fmt.Sprintf("%d processes", n)
+}
+
+func holdVerb(n int) string {
+	if n == 1 {
+		return "holds"
+	}
+	return "hold"
+}
+
 // killLockers shows who holds files in dir, then terminates them after a [y/N] (default No),
 // or straight away with force. Editors and shells are never terminated.
 func killLockers(dir string, lockers []winapi.Locker, force bool) error {
@@ -1020,19 +1042,19 @@ func killLockers(dir string, lockers []winapi.Locker, force bool) error {
 		}
 	}
 	if !opt.json {
-		fmt.Fprintf(stderr, "%d process(es) hold files in %s:\n", len(lockers), dir)
+		fmt.Fprintf(stderr, "%s %s files in %s:\n", nProcs(len(lockers)), holdVerb(len(lockers)), dir)
 		lockerTable(stderr, ls)
 	}
 	if len(blocked) > 0 {
-		return Fail(exitRefused, strings.Join(blocked, ", ")+" hold files in "+dir,
+		return Fail(exitRefused, strings.Join(blocked, ", ")+" "+holdVerb(len(blocked))+" files in "+dir,
 			"venvctl never terminates editors or shells; close them (or their Python terminal), then retry")
 	}
 	if !force {
 		if !interactive() {
-			return Fail(exitRefused, fmt.Sprintf("%d process(es) hold files in %s", len(lockers), dir),
+			return Fail(exitRefused, fmt.Sprintf("%s %s files in %s", nProcs(len(lockers)), holdVerb(len(lockers)), dir),
 				"close them, or rerun with --force to terminate them")
 		}
-		if !confirm(fmt.Sprintf("terminate %d process(es)?", len(lockers))) {
+		if !confirm(fmt.Sprintf("terminate %s?", nProcs(len(lockers)))) {
 			return Fail(exitRefused, "not terminated, nothing deleted", "close the processes yourself, then retry")
 		}
 	}
@@ -1275,7 +1297,7 @@ Rewriting a signed uv launcher invalidates its Authenticode signature. Use --dry
 			case len(r.Fixed) == 0 && r.Relocatable:
 				return nothing(e.Name + " is relocatable; nothing to repair")
 			case len(r.Fixed) == 0:
-				return nothing(e.Name + " already points at " + e.Path)
+				return nothing(e.Name + " is already at " + e.Path + "; nothing to repair")
 			}
 			verb := "rewrote"
 			if dry {

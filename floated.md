@@ -80,7 +80,7 @@ The brief was checked against this machine first, then only items that fix or ha
 
 ## 16. Renamed to pyGo
 You asked for the name pyGo. Command is `pygo` (lowercase, easiest to type; Windows does not care about case), product name pyGo in help text. Renamed together so nothing half-matches: Go module `pygo`, `cmd/pygo`, state dir `%LOCALAPPDATA%\pygo`, hook files `pygo_hook.cmd`/`pygo_env.cmd`, env vars `_PYGO_OLD_PATH`/`_PYGO_OLD_PROMPT`/`_PYGO_OLD_PS1`, trash suffix `.pygo-trash`, shell function `pygo`.
-Migration: copied `registry.json` (your scanned venvs) to the new folder, installed `pygo.exe` in `%LOCALAPPDATA%\pygoin`, swapped the user PATH entry. Old `%LOCALAPPDATA%\winvenv` stays until the old `wv` hook lines are removed from the profile, AutoRun and `.bashrc`, because those still call `wv.exe`. No migration code in the binary: it was a one-time move for one machine.
+Migration: copied `registry.json` (your scanned venvs) to the new folder, installed `pygo.exe` in `%LOCALAPPDATA%\pygo\bin`, swapped the user PATH entry. Old `%LOCALAPPDATA%\winvenv` stays until the old `wv` hook lines are removed from the profile, AutoRun and `.bashrc`, because those still call `wv.exe`. No migration code in the binary: it was a one-time move for one machine.
 Side note: a `pygo scan` of the temp folder registered 12 venvs from other Claude temp sessions; they were unregistered (folders left alone).
 
 ## 17. Renamed to venvctl
@@ -88,8 +88,7 @@ Renamed to venvctl. Reason: `pygo` collides with an existing ReiterAdam/pygo ven
 Entries 1-16 above keep the names that were current when they were written (`pygo`, `_PYGO_OLD_PATH`, `%LOCALAPPDATA%\pygo`, ...); today each is the `venvctl` equivalent (`venvctl-complete.md` section 11b has the full table).
 - **Compatibility, kept small on purpose.** `off`/`on` adopt and clear the `_PYGO_OLD_*` variables of shells activated before the rename. Old `.pygo-trash`/`.wv-trash` folders count as trash. There is no `pygo` alias.
 - **`venvctl init` cleans up both older hook generations itself** (WinVenv and pyGo), which replaces the manual paste-in snippet from entry 16. It filters line-by-line and segment-by-segment in pure functions, so the rules are unit-tested on strings. It keeps profile encoding and line endings, writes `.bashrc` LF without a BOM, and keeps VS Code's AutoRun segment in order. It has `--dry-run` and `--remove`.
-- **Migration on first run, not at install time.** It is triggered by a missing `venvctl
-egistry.json` (not a missing folder, so an already-copied `bin` does not block it). Central envs are renamed, not copied, and then repaired, because their launchers embed absolute paths. The old folder is never deleted.
+- **Migration on first run, not at install time.** It is triggered by a missing `venvctl\registry.json` (not a missing folder, so an already-copied `bin` does not block it). Central envs are renamed, not copied, and then repaired, because their launchers embed absolute paths. The old folder is never deleted.
 - **`VENVCTL_HOME`** overrides the state root. Legacy folders are then its siblings, which keeps tests off the real `%LOCALAPPDATA%`.
 - **Found while testing the compat code:** PowerShell's `Get-Item`/`Remove-Item` silently ignore a `function:global:` prefix, so the prompt was never restored by `off` (this was true in pyGo and WinVenv too). Prompt functions are now read and written as `${function:global:name}` and removed by unqualified path. Verified by an on/off round trip whose prompt matches before and after.
 
@@ -160,7 +159,7 @@ The cost is that `pip install venvctl` installs someone else's project, so the R
 - The first `venvctl` run migrates `%LOCALAPPDATA%\pygo`; delete it, and `\winvenv`, after checking `venvctl list`.
 - Upgrade uv to ≥ 0.9.9 and rerun `go test ./internal/envmgr/ -run EndToEnd -v`. It then exercises the resource-format launchers for real.
 - Clink (experimental), oh-my-posh and starship attachment, interactive prompts, real File Locksmith and PyManager machines are untested here.
-- The Windows Terminal profile fragment the README wording mentions is not built.
-- No release workflow, signing certificate, real icon or README text yet.
+- The Windows Terminal profile fragment is not built.
+- No release workflow, signing certificate or real icon yet.
 - One `project` per central env. Scan misses AppData-stored envs (pipx/Poetry/Hatch/PDM) and conda.
 - Killing a venv `python.exe` launcher can orphan its base-interpreter child; Restart Manager lists the child only if it maps venv `.pyd` files.

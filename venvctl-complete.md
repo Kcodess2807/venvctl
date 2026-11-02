@@ -1,7 +1,7 @@
 # venvctl: complete project record
 
 Everything built, decided, tested, fixed and left open while building venvctl, as of 29 Oct 2026.
-It was first called WinVenv (`wv`), then pyGo (`pygo`), and is now venvctl. Sections 11 and 11b cover the two renames.
+It was first called WinVenv (`wv`), then pyGo (`pygo`), and is now venvctl. Sections 11a and 11b cover the two renames.
 For shorter views, see `design.md` (architecture), `floated.md` (decision log), `docs/json.md` (JSON schemas) and `redirect.md` (`.venv` redirect files).
 
 ---
@@ -64,7 +64,7 @@ The change history is in section 19; this run's pre-launch fixes are in section 
 ## 3. Project layout
 
 ```
-D:\PROJECTS\venvctl\                    (was D:\PROJECTS\pygo, renamed at the end of this run)
+D:\PROJECTS\pygo\                       (the folder keeps its old name; the repo is github.com/Kcodess2807/venvctl)
 ├── cmd\venvctl\main.go                  11   os.Exit(cli.Run(args, stdout, stderr, stdin))
 ├── internal\
 │   ├── cli\cli.go                      540   root, global flags, exit codes, Fail, output, migration, version, completion, overview, doctor
@@ -90,7 +90,7 @@ D:\PROJECTS\venvctl\                    (was D:\PROJECTS\pygo, renamed at the en
 ├── packaging\scoop\venvctl.json              draft
 ├── .github\workflows\ci.yml                  vet, test, build both arches on windows-latest
 ├── build.ps1                                 release build, checksums, --sign
-├── docs\json.md, redirect.md, design.md, floated.md, venvctl-complete.md, README.md (placeholder)
+├── docs\json.md, redirect.md, design.md, floated.md, venvctl-complete.md, README.md
 └── .gitattributes (LF), .gitignore
 ```
 
@@ -168,7 +168,7 @@ Every error prints `✗ <what happened>` and then `  → <what to do next>`.
 | Use | `unlink` | | Remove this folder's `.venv` redirect (never a `.venv` folder) |
 | Find | `list` (`ls`) | `--sort name\|size\|last-used\|version`, `--filter missing\|broken\|central\|local`, `--min-size 500MB`, `--older-than 90d`, `--paths` | Table with `*` marking the active venv, right-aligned sizes, `~` for estimated last use, and `project → venv` |
 | Find | `scan [root...]` | `-n/--dry-run` | Register venvs and redirect files, unregister vanished ones; live counter on consoles |
-| Maintain | `nuke <name\|path>...` (`rm`) | `-f/--force`, `-n/--dry-run`, `--wait 30s` | Delete, after showing and (with your OK) stopping lockers; editors and shells are never stopped. Refuses when you're inside the venv; asks PowerToys File Locksmith (read-only) when the Restart Manager names nobody; `--wait` retries for antivirus |
+| Maintain | `nuke <name\|path>...` (`rm`, `remove`) | `-f/--force`, `-n/--dry-run`, `--wait 30s` | Delete, after showing and (with your OK) stopping lockers; editors and shells are never stopped. Refuses when you're inside the venv; asks PowerToys File Locksmith (read-only) when the Restart Manager names nobody; `--wait` retries for antivirus |
 | Maintain | `prune` | `--older-than`, `--min-size`, `--missing`, `--broken`, `--central`/`--local`, `-n/--dry-run`, `-y/--yes` | Bulk delete through the nuke path; needs at least one criterion; skips the active venv |
 | Maintain | `repair [name\|path]` | `-n/--dry-run`, `--relative` | Fix a moved venv made by pip/venv or older uv, file by file by format (section 8.3); relocatable venvs need no repair (exit 4) |
 | Maintain | `doctor` | | Read-only checks (section 9) |
@@ -609,7 +609,7 @@ All of them, with the reasoning, are in `floated.md`: entries 1–16 for WinVenv
 | Real signing and publishing | `build.ps1 --sign` is ready; needs a certificate (Azure Trusted Signing / SignPath) |
 | Release workflow | CI builds artifacts but does not publish |
 | Real icon | placeholders in `winres\` |
-| README | placeholder; you are pasting the draft |
+| README | written (f5e83a8, 26a61cd, 8af06d7) |
 | Windows Terminal profile fragment | the one place the "never runs Activate.ps1" design really beats a Group Policy lock (`powershell -NoExit -Command ...` needs no profile). The README wording you asked for mentions it, so build it before publishing that sentence |
 | Cached init text | only for antivirus-slowed machines |
 | Discovery of AppData envs (pipx, Poetry, Hatch, PDM) and conda | from the competitive research; scan skips `AppData` and needs `pyvenv.cfg` |
@@ -659,7 +659,7 @@ The research report (`reports\Windows venv tools versus venvctl.md`) found three
 **Premises that didn't hold on this machine:**
 - **uv is 0.8.23**, not ≥ 0.13.
 - **`testdata\uv-trailer-0.8.23.exe` didn't exist.** It was created here from a real uv 0.8.23 `pyflakes.exe`.
-- **The README is still a placeholder.** The required wording is recorded in it instead (see `README.md`).
+- **The README is written** (f5e83a8, 26a61cd, 8af06d7) and matches the CLI; the MIT license is in `LICENSE`.
 
 **Positioning changes from the research:**
 - Don't headline "unaffected by ExecutionPolicy": the hook lives in `$PROFILE`, which needs the same policy.
@@ -689,4 +689,9 @@ The research report (`reports\Windows venv tools versus venvctl.md`) found three
 | `d188159` | feat(nuke): see what Restart Manager can't; wait out antivirus (L1, L2) |
 | `628931d` | fix(on): drop a foreign venv's Scripts from the saved PATH (K1) |
 | `89376d6` | docs(cli): mark CMD auto-activate via Clink as experimental, untested (K2) |
-| (this commit) | docs: README wording, venvctl-complete.md section 18, floated.md 26–28, json.md schema updates |
+| b2af393 | docs: README wording, venvctl-complete.md section 18, floated.md 26–28, json.md schema updates |
+| 91d4bb3 | refactor: apply the repo-wide ponytail audit (10 items, -104 lines) |
+| f5e83a8 | docs: write the README |
+| 26a61cd | docs: real clone URL in the README |
+| 8af06d7 | docs: professional README; add MIT license |
+| (this commit) | docs/cli: proofread pass: plurals ("1 process holds"), "venvs" everywhere, create captures uv's output, dry-run wording, stale notes in venvctl-complete.md and floated.md |

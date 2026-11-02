@@ -245,7 +245,7 @@ func (r *Registry) Merge(e Entry) Entry {
 type NotFoundError struct{ Arg string }
 
 func (e *NotFoundError) Error() string {
-	return fmt.Sprintf("%q is neither a venv folder nor a registered environment", e.Arg)
+	return fmt.Sprintf("%q is neither a venv folder nor a registered venv", e.Arg)
 }
 
 // AmbiguousError: several registered venvs share the name; the caller picks one.
@@ -255,7 +255,7 @@ type AmbiguousError struct {
 }
 
 func (e *AmbiguousError) Error() string {
-	return fmt.Sprintf("%q matches %d environments", e.Name, len(e.Hits))
+	return fmt.Sprintf("%q matches %d venvs", e.Name, len(e.Hits))
 }
 
 // CreateCommand returns the command that creates a venv at dest: `uv venv` when uv is on PATH,

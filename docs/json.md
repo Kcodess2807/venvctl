@@ -9,7 +9,7 @@
 - **Errors** go to **stderr** as one compact JSON object per error:
 
   ```json
-  {"error":"\"ghost\" is neither a venv folder nor a registered environment","fix":"run `venvctl list` to see names, or `venvctl scan` to register new venvs","exit_code":1}
+  {"error":"\"ghost\" is neither a venv folder nor a registered venv","fix":"run `venvctl list` to see names, or `venvctl scan` to register new venvs","exit_code":1}
   ```
 
   `nuke` and `prune` report per-venv failures inside their `results` instead, and print the error object for each one too.

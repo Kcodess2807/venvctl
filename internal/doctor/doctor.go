@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -187,7 +188,7 @@ func oldStateDirs() Check {
 	if len(found) > 0 {
 		c.Status = "warn"
 		c.Detail = strings.Join(found, ", ") + " still present"
-		c.Fix = "delete it after confirming `venvctl list` shows your envs (and no shell hook still calls an exe inside it)"
+		c.Fix = "delete those folders after confirming `venvctl list` shows your envs (and no shell hook still calls an exe inside them)"
 	}
 	return c
 }
@@ -418,7 +419,11 @@ func vcRuntime() Check {
 		return c
 	}
 	c.Detail = "vcruntime140.dll missing; CPython and many wheels will not start"
-	c.Fix = "install https://aka.ms/vs/17/release/vc_redist.x64.exe"
+	arch := "x64"
+	if runtime.GOARCH == "arm64" {
+		arch = "arm64"
+	}
+	c.Fix = "install https://aka.ms/vs/17/release/vc_redist." + arch + ".exe"
 	return c
 }
 

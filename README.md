@@ -19,10 +19,10 @@
 
 ```text
 PS D:\code\api> venvctl nuke old-api
-1 process(es) hold files in C:\Users\you\AppData\Local\venvctl\envs\old-api:
+1 process holds files in C:\Users\you\AppData\Local\venvctl\envs\old-api:
   PID  NAME    SPAWNED BY      OPEN FILES
 30728  Python  powershell.exe  1: python.exe
-terminate 1 process(es)? [y/N]
+terminate 1 process? [y/N]
 ```
 
 Deleting a venv on Windows often fails with `Access is denied (os error 5)` and no explanation. venvctl identifies the process holding the files and what launched it, asks before stopping it, and refuses when the holder is an editor or a shell. The folder is renamed before it is deleted, so a failed delete never leaves a half-removed environment behind.
@@ -38,7 +38,7 @@ Deleting a venv on Windows often fails with `Access is denied (os error 5)` and 
 | **Repair after a move** | `repair` rewrites the absolute paths that pip and uv launchers embed, so a renamed project folder works again without reinstalling. Environments venvctl creates are relocatable and never need it. |
 | **Editor visibility** | Central environments are linked to their project through a PEP 832 `.venv` redirect file. |
 | **Diagnostics** | `doctor` checks the Microsoft Store `python.exe` stub, the ExecutionPolicy scope that blocks your profile, long paths, the VC++ runtime, shell hooks and venvs inside cloud-synced folders. |
-| **Scriptable** | Every command supports `--json`, and exit codes are fixed: 0 ok, 1 failure, 2 usage, 3 refused, 4 nothing to do. |
+| **Scriptable** | Every command that prints results supports `--json`, and exit codes are fixed: 0 ok, 1 failure, 2 usage, 3 refused, 4 nothing to do. |
 
 ## Installation
 
@@ -96,7 +96,7 @@ From then on, entering the project activates its venv and leaving deactivates it
 
 ```text
 venvctl on ──► shell function ──► venvctl.exe prints a script ──► the shell evaluates it in place
-               (installed once by `venvctl init` in $PROFILE, the CMD AutoRun key and .bashrc)
+               (installed once by `venvctl init` in $PROFILE, the CMD AutoRun registry value and .bashrc)
 ```
 
 A child process cannot modify its parent shell's environment, so venvctl uses the same pattern as fnm, zoxide and starship: the binary prints shell code and a small function evaluates it. PowerShell still has to load your profile; if your execution policy prevents that, `venvctl doctor` names the scope responsible and the fix.

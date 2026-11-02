@@ -48,7 +48,7 @@ func TestFlagsAndExitCodes(t *testing.T) {
 		{"bad filter", []string{"list", "--filter", "nope"}, 2, "", "unknown --filter", false},
 		{"bad min-size", []string{"list", "--min-size", "5XB"}, 2, "", "invalid --min-size", false},
 		{"bad older-than", []string{"list", "--older-than", "soon"}, 2, "", "invalid --older-than", false},
-		{"empty list is nothing to do", []string{"list"}, 4, "", "no environments known yet", false},
+		{"empty list is nothing to do", []string{"list"}, 4, "", "no venvs known yet", false},
 		{"empty json list", []string{"--json", "list"}, 4, "[]", "", true},
 		{"quiet empty list prints nothing", []string{"-q", "list"}, 4, "", "", false},
 		{"version", []string{"version"}, 0, "venvctl dev", "", false},
